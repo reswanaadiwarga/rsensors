@@ -20,6 +20,13 @@
   the normal poll keeps updating; without Shizuku the page shows a Start
   Shizuku state instead of stale data. The expanded header now scales to fit
   all four metrics and the source dot.
+- Added **Stop app** to the process page: tap a process/app row to select it
+  (larger rows, blue tint), then Stop and confirm. A tiered policy protects
+  Rsensors, Shizuku, native/system UIDs, persistent and core system packages;
+  system apps such as AICore, foreground/visible apps, the launcher, keyboard
+  and Play services warn first. The stop is Android's package
+  `am force-stop` through Shizuku, not a raw kill; the page rescans once and a
+  system app that restarts simply reappears.
 
 ## 0.2.0 — 2026-11-22
 

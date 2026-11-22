@@ -1,8 +1,9 @@
 # Rsensors
 
 A floating overlay for Android that shows live CPU/GPU/battery temperatures, the
-foreground app's frame rate, and per-app memory usage. CPU/GPU, FPS and process
-memory access use [Shizuku](https://shizuku.rikka.app/).
+foreground app's frame rate, and per-app memory usage — and can stop a selected
+app. CPU/GPU, FPS, process memory and stopping use
+[Shizuku](https://shizuku.rikka.app/).
 
 ![Collapsed pill and expanded card](docs/images/overlay.png)
 
@@ -24,6 +25,13 @@ memory access use [Shizuku](https://shizuku.rikka.app/).
   `Refresh` takes a new snapshot; `Back` returns to the card. The normal pill
   keeps updating while the page is open. Without Shizuku the page explains why
   it is unavailable and offers the setup action.
+- **Stop app**: tap a row to select it, then Stop and confirm. The selection
+  bar shows the app, package, PSS and a protection reason. Core system, native,
+  persistent, self and Shizuku processes are protected and never offer Stop;
+  system/foreground/launcher/keyboard/Play services rows warn first. AICore is
+  a warning, not a block. The stop is Android's package force-stop, so the whole
+  app stops; the page rescans once and a system app that restarts simply
+  reappears. There is no raw kill and no undo.
 - **Real temperatures**: CPU/GPU from the platform thermal service through
   Shizuku; battery temperature and thermal status from Android. Missing sensors
   render `—`, never another sensor's value.
@@ -57,7 +65,7 @@ memory access use [Shizuku](https://shizuku.rikka.app/).
 | | |
 |---|---|
 | Android | 8.0 (API 26) or newer; target API 36 |
-| Shizuku | required for CPU/GPU temperatures, FPS and process memory |
+| Shizuku | required for CPU/GPU temperatures, FPS, process memory and stopping apps |
 | Permissions | display over other apps, notifications |
 | Tested device | POCO X7 Pro, Android 16 / HyperOS |
 | Tested Shizuku | 13.5.4 |

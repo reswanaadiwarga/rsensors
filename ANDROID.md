@@ -4,12 +4,12 @@ Development design and task log. Public overview: [README.md](README.md);
 architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
-Status: **T0-T17 complete; T18 (Stop app) in progress.** The RAM pill and
-process-memory page are committed on `feat/process-ram` and
-installed/device-verified on the target (250 tests). The 0.2.0 release remains
-the published baseline and does not include these changes; nothing is merged or
-pushed yet. This file is the source of truth for the app; change it before
-changing code.
+Status: **T0-T18 complete.** The RAM pill, process-memory page and Stop app are
+committed on `feat/stop-app` (T17 is on the parent `feat/process-ram`) and
+installed/device-verified on the target (**279 tests**). The 0.2.0 release
+remains the published baseline and does not include these changes; nothing is
+merged or pushed yet. This file is the source of truth for the app; change it
+before changing code.
 
 ## 1. Goal
 
@@ -461,11 +461,10 @@ release. T17 adds the process-memory page after the RAM row and pill.
 | T15j ✅ | No-device quality pass | Version warning extracted to `core/ShizukuCompat.kt` with 6 tests; corrupt T15h PNGs removed; 0.2.0 notes/checklist drafted; no behaviour change; 214 tests; no device |
 | T16 ✅ | Release 0.2.0 | Installed and device-verified: versionCode 2 / 0.2.0, R8 + shrinking, 1,105,888 B, SHA-256 `4232C96E…EA0023`, v2 debug-signed. The Shizuku UserService/FPS path survives R8, the pill/card/guide/session graph/notification work, recording is v2, and the degraded `CPU/GPU — BAT 36° FPS —` prompt plus `Shizuku help` action recover after a server restart. 214 tests. |
 | T17 ✅ | Process memory page | RAM row opens a second page in the expanded card; `dumpsys meminfo --oom` PSS parsed shell-side; `Apps` groups by package and hides `Native`/`System`, `Processes` shows every row; 8 per page with prev/next; `Back`/`Refresh`; on-open + manual scans only; card 280 dp and restores 220 dp on back; no new permissions; unavailable state without Shizuku and in demo mode; parser fixtures; the pill keeps polling during a scan; 250 tests; device-verified: Apps 82 / Processes 270 rows sorted by PSS, pager `1–8`/`9–16`, Refresh scans, no-Shizuku state + Start Shizuku, recovery after `start.sh`, and the header keeps all four metrics + dot (10 sp card / 12 sp page) |
-| T18 | Stop app | Tap-select a process/app row with a highlight and selection bar; Stop always confirms; Apps and Processes both supported (Processes says Stop app and warns the whole package stops; native protected); tiered `StopPolicy` — protected: self, Shizuku, native/no package, UID < 10000, core denylist, persistent, Native/System/Persistent/Persistent Service; warning: system/updated-system/privileged including AICore, foreground/visible, launcher, IME, GMS; normal: cached/background; `am force-stop <validated package>` through Shizuku AIDL version 5, no raw kill; one rescan after a stop; AICore stopped on device; policy tests; no new permissions |
+| T18 ✅ | Stop app | Tap-select a process/app row with a highlight and selection bar; Stop always confirms; Apps and Processes both supported (Processes says Stop app and warns the whole package stops; native protected); tiered `StopPolicy` — protected: self, Shizuku, native/no package, UID < 10000, core denylist, persistent, Native/System/Persistent/Persistent Service; warning: system/updated-system/privileged including AICore, foreground/visible, launcher, IME, GMS; normal: cached/background; `am force-stop <validated package>` through Shizuku AIDL version 5, no raw kill; one rescan after a stop; 279 tests; device-verified: AICore selected as `WARNING · On-device AI…`, confirmed `Stop AICore?`, `stopPackage … exit=0 reply=OK`, AICore pid gone, one rescan 266 rows, RAM 8.7G→7.1G, poll still running; protected `system` row showed `PROTECTED · Core system process.` with no Stop; Cancel restored the footer; Processes warning row showed the `Stop app` label; no crash |
 
-T0-T17 are complete. T17 is committed on `feat/process-ram`; the RAM pill and
-process page are not merged or pushed. T18 (Stop app) is the current task on
-`feat/stop-app`.
+T0-T18 are complete. T17 is committed on `feat/process-ram`; T18 is stacked on
+`feat/stop-app`; nothing is merged or pushed.
 
 ### T17 process-memory probe (2026-11-23)
 
