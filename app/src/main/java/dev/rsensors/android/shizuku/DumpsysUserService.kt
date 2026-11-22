@@ -24,7 +24,8 @@ import java.io.IOException
  * `dumpsys SurfaceFlinger --list/--latency`, returning the one-line reply the
  * app parses with [dev.rsensors.android.core.parseFpsReply]. [runMeminfo] runs
  * `dumpsys meminfo --oom` and returns its raw stdout for the T17 process page
- * ([dev.rsensors.android.core.parseMeminfoPss]).
+ * ([dev.rsensors.android.core.parseMeminfoPss]); [stopPackage] runs
+ * `am force-stop <package>` for the T18 stop action.
  *
  * `dumpsys` is invoked by absolute path because a UserService process does not
  * inherit the app's PATH; relying on a bare `dumpsys` was a silent
@@ -36,9 +37,10 @@ import java.io.IOException
  * referenced by name from another process, hence `@Keep`.
  *
  * Threading: each call on the binder thread; the process object is confined to
- * that call. Errors are left to propagate to the caller as binder/IO failures,
- * which [dev.rsensors.android.source.ShizukuDumpsysRunner] converts to a null
- * dump so a shell hiccup cannot crash the overlay.
+ * that call. [runDumpsys] and [runMeminfo] leave errors to propagate as
+ * binder/IO failures, which [dev.rsensors.android.source.ShizukuDumpsysRunner]
+ * converts to a null dump so a shell hiccup cannot crash the overlay;
+ * [stopPackage] catches its own so a failed stop is an `ERR` reply.
  */
 @Keep
 class DumpsysUserService : IDumpsysService.Stub {
@@ -140,6 +142,47 @@ class DumpsysUserService : IDumpsysService.Stub {
     }
   }
 
+  /**
+   * Stops every process of [packageName] with `am force-stop` in this shell
+   * process (ANDROID.md §3, §9, §8 T18).
+   *
+   * The name is checked against [PACKAGE_NAME] and [MAX_PACKAGE_LENGTH] before
+   * any process exists, and the command is passed as a three-element argument
+   * array so no shell parses it. A failed stop is a reply, never an exception,
+   * because the process page must survive a stop that Android refuses.
+   *
+   * @param packageName package to force-stop; rejected without running
+   *   anything when it is empty, longer than 255 characters or not a
+   *   dot-separated package name
+   * @return `OK` when `am` exited 0 without printing anything, otherwise
+   *   `ERR exit=<code>` plus the first non-blank output line (≤80 chars), or
+   *   `ERR <short reason>` when validation or process execution failed
+   */
+  override fun stopPackage(packageName: String): String {
+    Log.i(TAG, "stopPackage start pkg=$packageName")
+    if (packageName.length !in 1..MAX_PACKAGE_LENGTH || !PACKAGE_NAME.matches(packageName)) {
+      Log.w(TAG, "stopPackage rejected pkg=$packageName")
+      return "ERR invalid package"
+    }
+    return try {
+      val process =
+        ProcessBuilder(AM, "force-stop", packageName)
+          .redirectErrorStream(true)
+          .start()
+      // Read to EOF before waiting: a failing `am` can write more than a pipe
+      // buffer, so waitFor-first would deadlock on a full pipe.
+      val output = process.inputStream.bufferedReader().use { it.readText() }
+      val exit = process.waitFor()
+      val error = firstUsefulLine(output)
+      val reply = if (exit == 0 && error == null) "OK" else errorLine(exit, error)
+      Log.i(TAG, "stopPackage end pkg=$packageName exit=$exit reply=$reply")
+      reply
+    } catch (e: Exception) {
+      Log.w(TAG, "stopPackage failed pkg=$packageName", e)
+      "ERR " + shortReason(e)
+    }
+  }
+
   /** One measurement plus the layer it came from, or null when idle. */
   private data class Resolved(val measurement: FpsMeasurement, val layer: String?)
 
@@ -225,11 +268,33 @@ class DumpsysUserService : IDumpsysService.Stub {
       ?.take(80)
       ?: error.javaClass.simpleName
 
+  /** First non-blank line of [text], trimmed to the 80-char reply budget. */
+  private fun firstUsefulLine(text: String): String? =
+    text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(80)
+
+  /** `ERR exit=<code>` with the first useful line appended when there is one. */
+  private fun errorLine(exit: Int, line: String?): String =
+    if (line == null) "ERR exit=$exit" else "ERR exit=$exit $line"
+
   private companion object {
     private const val TAG = "Rsensors"
 
     /** Absolute because the UserService process has no useful PATH. */
     private const val DUMPSYS = "/system/bin/dumpsys"
+
+    /** Absolute for the same reason as [DUMPSYS]; runs the stop command. */
+    private const val AM = "/system/bin/am"
+
+    /** Longest package name Android accepts; anything longer is rejected. */
+    private const val MAX_PACKAGE_LENGTH = 255
+
+    /**
+     * A package name safe to hand to a privileged process: dot-separated
+     * segments of letters, digits and underscores. Deliberately stricter than
+     * `PackageManager` (no hyphens) because this is the only input check on the
+     * stop route.
+     */
+    private val PACKAGE_NAME = Regex("^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$")
 
     /** Minimum time between focus/layer re-resolves while nothing is fresh. */
     private const val RESOLVE_INTERVAL_MS = 4_000L

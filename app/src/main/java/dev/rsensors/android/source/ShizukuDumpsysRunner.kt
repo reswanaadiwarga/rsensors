@@ -14,15 +14,16 @@ import dev.rsensors.android.shizuku.IDumpsysService
 import rikka.shizuku.Shizuku
 
 /**
- * [DumpsysRunner], [FpsRunner] and [MeminfoRunner] backed by one Shizuku
- * UserService (ANDROID.md §5, §9, §8 T14, §8 T17).
+ * [DumpsysRunner], [FpsRunner], [MeminfoRunner] and [StopRunner] backed by one
+ * Shizuku UserService (ANDROID.md §5, §9, §8 T14, §8 T17, §8 T18).
  *
  * Shizuku 13 no longer exposes a process API, so the work runs inside
  * [DumpsysUserService] — a process Shizuku starts as the shell UID — and this
  * runner only binds to it and calls [IDumpsysService.runDumpsys] /
- * [IDumpsysService.runFps] / [IDumpsysService.runMeminfo]. All calls share the
- * binding: `dumpsys window`, `--list`, `--latency` and the meminfo dump must run
- * in the same shell process as the thermal dump. Binding is lazy and
+ * [IDumpsysService.runFps] / [IDumpsysService.runMeminfo] /
+ * [IDumpsysService.stopPackage]. All calls share the binding: `dumpsys window`,
+ * `--list`, `--latency`, the meminfo dump and `am force-stop` must run in the
+ * same shell process as the thermal dump. Binding is lazy and
  * self-healing: the first call after a granted permission starts a bind and
  * yields null for that poll, later polls use the live service, and any failure
  * clears the reference so the next poll binds again. That is what makes killing
@@ -31,28 +32,32 @@ import rikka.shizuku.Shizuku
  *
  * Every Shizuku call is wrapped: the poller and the process-page scan must never
  * see a RemoteException, a dead binder, a missing provider or a denied
- * permission as a crash. All of them mean "no dump / no FPS / no meminfo this
- * call", and the chain falls back to battery/status while the temperature poll
- * continues.
+ * permission as a crash. All of them mean "no dump / no FPS / no meminfo / no
+ * stop reply this call", and the chain falls back to battery/status while the
+ * temperature poll continues.
  *
  * Threading: [run] and [runFps] are called on the poller's worker thread and
- * [runMeminfo] on the process page's own scan thread, while the connection
- * callbacks arrive on the main thread. The binder calls themselves
- * (`pingBinder`, `checkSelfPermission`, `bindUserService`) are posted to the
- * main looper, matching the official demo and avoiding any binder-context
- * assumption; the workers never block waiting for them. [service] stays
- * volatile so calls can read the live reference without taking the lock, while
- * every bind-state transition ([binding], [bindStartedAt]) is guarded by
- * [bindLock] so two callers cannot post duplicate bind requests. [close] runs
- * on the poller's worker.
+ * [runMeminfo] and [stopPackage] on the process page's own worker thread, while
+ * the connection callbacks arrive on the main thread. The binder calls
+ * themselves (`pingBinder`, `checkSelfPermission`, `bindUserService`) are
+ * posted to the main looper, matching the official demo and avoiding any
+ * binder-context assumption; the workers never block waiting for them.
+ * [service] stays volatile so calls can read the live reference without taking
+ * the lock, while every bind-state transition ([binding], [bindStartedAt]) is
+ * guarded by [bindLock] so two callers cannot post duplicate bind requests.
+ * [close] runs on the poller's worker.
  *
  * A bind that never connects is abandoned after [BIND_TIMEOUT_MS] so a stale
  * Shizuku registration cannot wedge the source forever; the next poll retries.
+ * A connection callback that arrives after a bind was abandoned, forgotten or
+ * already handled is ignored rather than resurrecting a service the runner
+ * gave up on (T17 verifier finding).
  *
  * @param context application context; its package name addresses the
  *   UserService component and the provider authority
  */
-class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, MeminfoRunner {
+class ShizukuDumpsysRunner(context: Context) :
+  DumpsysRunner, FpsRunner, MeminfoRunner, StopRunner {
   private val appContext = context.applicationContext
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -61,8 +66,8 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, Meminfo
    * Binding descriptor for the UserService.
    *
    * `daemon(false)` because the OS may reclaim an idle service between polls;
-   * `version(4)` forces a fresh registration after the T17 AIDL added
-   * `runMeminfo`, so a stale v3 shell process cannot answer the new
+   * `version(5)` forces a fresh registration after the T18 AIDL added
+   * `stopPackage`, so a stale v4 shell process cannot answer the new
    * transaction;
    * `tag("dumpsys")` keeps that record addressable; `debuggable(false)` keeps
    * the shell-side process un-debuggable in release and debug builds alike.
@@ -74,7 +79,7 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, Meminfo
     .processNameSuffix("dumpsys")
     .tag(TAG_NAME)
     .debuggable(false)
-    .version(4)
+    .version(5)
 
   /** Live binding, or null while unbound; written on both threads. */
   @Volatile private var service: IDumpsysService? = null
@@ -104,6 +109,12 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, Meminfo
       Log.i(TAG, "onServiceConnected binder=${binder != null}")
       val bound = binder?.let { IDumpsysService.Stub.asInterface(it) }
       synchronized(bindLock) {
+        // A callback that arrives after close(), a failure or a bind timeout
+        // must not resurrect a service the runner already gave up on.
+        if (!binding) {
+          Log.i(TAG, "late onServiceConnected ignored")
+          return
+        }
         service = bound
         binding = false
         bindStartedAt = 0L
@@ -114,8 +125,11 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, Meminfo
       Log.i(TAG, "onServiceDisconnected")
       synchronized(bindLock) {
         service = null
-        binding = false
-        bindStartedAt = 0L
+        // The disconnect belongs to the old service; a bind started after it is
+        // still pending and keeps its flag and timestamp.
+        if (!binding) {
+          bindStartedAt = 0L
+        }
       }
     }
   }
@@ -192,6 +206,38 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, Meminfo
       dump
     } catch (e: Exception) {
       Log.w(TAG, "runMeminfo failed", e)
+      forgetService()
+      null
+    }
+  }
+
+  /**
+   * Stops [packageName] through the same shell process as [run] (ANDROID.md §3,
+   * §9, §8 T18).
+   *
+   * Called from the process page's stop action, not the 2 s poll. A missing
+   * service reports null like the scan route; the page keeps its selection and
+   * shows the failure instead of crashing.
+   *
+   * @return the UserService's `OK` / `ERR …` reply, or null on any Shizuku or
+   *   binder failure; the UserService never throws for a bad package or a
+   *   failed stop
+   */
+  override fun stopPackage(packageName: String): String? {
+    val current = service
+    if (current == null) {
+      Log.d(TAG, "stopPackage: no UserService (binding=$binding)")
+      abandonTimedOutBind()
+      tryBind()
+      return null
+    }
+    return try {
+      Log.d(TAG, "stopPackage call pkg=$packageName")
+      val reply = current.stopPackage(packageName)
+      Log.d(TAG, "stopPackage returned $reply")
+      reply
+    } catch (e: Exception) {
+      Log.w(TAG, "stopPackage failed", e)
       forgetService()
       null
     }
@@ -282,7 +328,7 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, Meminfo
     }
 
     try {
-      Log.i(TAG, "bindUserService version=4 tag=$TAG_NAME")
+      Log.i(TAG, "bindUserService version=5 tag=$TAG_NAME")
       Shizuku.bindUserService(args, connection)
       synchronized(bindLock) {
         // The connection may already have fired while bindUserService ran; do

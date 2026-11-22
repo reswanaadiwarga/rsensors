@@ -6,8 +6,10 @@
 // instance by version. `runDumpsys` returns the thermal dump; `runFps` returns
 // one `OK fps=…` / `ERR …` line for the foreground SurfaceFlinger layer
 // (ANDROID.md §8 T14); `runMeminfo` returns the raw `dumpsys meminfo --oom`
-// stdout for the process page (ANDROID.md §8 T17). Adding `runMeminfo` bumps
-// the UserService registration to version 4.
+// stdout for the process page (version 4, ANDROID.md §8 T17). `stopPackage`
+// runs `am force-stop` for one already-validated package and returns `OK` or
+// `ERR …` (ANDROID.md §8 T18); adding it bumps the UserService registration to
+// version 5.
 package dev.rsensors.android.shizuku;
 
 interface IDumpsysService {
@@ -15,4 +17,5 @@ interface IDumpsysService {
     String runDumpsys() = 1;
     String runFps() = 2;
     String runMeminfo() = 3;
+    String stopPackage(String packageName) = 4;
 }
