@@ -12,8 +12,9 @@ the foreground app's frame rate. CPU/GPU and FPS access use
   follow the green / amber / red bands and dim when the sample is stale.
   CPU/GPU shows the hotter SoC value and uses the worse of the two levels.
 - **Expanded card**: individual CPU, GPU and battery readings, each with the
-  maximum and minimum over the last 2 minutes; thermal status; FPS; and a
-  2-minute sparkline with a `CPU+GPU / CPU / GPU / BAT / FPS` selector.
+  maximum and minimum over the last 2 minutes; thermal status; FPS; system RAM
+  used/total with a compact usage bar; and a 2-minute sparkline with a
+  `CPU+GPU / CPU / GPU / BAT / FPS` selector.
 - **Real temperatures**: CPU/GPU from the platform thermal service through
   Shizuku; battery temperature and thermal status from Android. Missing sensors
   render `—`, never another sensor's value.

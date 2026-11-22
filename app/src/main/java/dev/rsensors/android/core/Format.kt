@@ -1,5 +1,6 @@
 package dev.rsensors.android.core
 
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /** Placeholder drawn wherever a value is unavailable (ANDROID.md §2.2). */
@@ -23,6 +24,28 @@ fun fmtTemp(value: Double?): String =
  */
 fun fmtFps(value: Double?): String =
   if (value == null) DASH else value.roundToInt().toString()
+
+/** Decimal gigabytes: Android reports memory in decimal units, not GiB. */
+private const val BYTES_PER_GB = 1_000_000_000.0
+
+/**
+ * System RAM as `used / total` in decimal gigabytes, e.g. `4.5 / 7.8 GB`.
+ *
+ * @param usedBytes memory in use in bytes, or null when unavailable
+ * @param totalBytes physical memory in bytes, or null when unavailable
+ * @return one decimal per figure with a fixed `.` separator; [DASH] when either
+ *   value is null or the total is not positive, because a ratio against no
+ *   total would be invented
+ */
+fun fmtRam(usedBytes: Long?, totalBytes: Long?): String {
+  if (usedBytes == null || totalBytes == null || totalBytes <= 0L) return DASH
+  return String.format(
+    Locale.ROOT,
+    "%.1f / %.1f GB",
+    usedBytes / BYTES_PER_GB,
+    totalBytes / BYTES_PER_GB,
+  )
+}
 
 /**
  * Human-readable age for a tooltip.

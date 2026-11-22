@@ -91,9 +91,10 @@ nice-to-haves:
   digits, dim when stale (15 s) and `—` when unknown. The dot is green for
   dumpsys/Shizuku, amber for sysfs, and gray for the battery/status fallback.
 - **Expanded card** (tap): individual CPU, GPU and battery rows, each with its
-  current value and the 2-minute `max`/`min`; thermal status, the FPS, Refresh,
-  Diagnostics, Stop monitoring (formerly "Stop overlay"), and a 2-minute
-  sparkline tagged `GRAPH · 2 MIN` with a cycle
+  current value and the 2-minute `max`/`min`; thermal status, the FPS, a system
+  RAM row (`used / total` in one-decimal GB) with a compact usage bar under it,
+  Refresh, Diagnostics, Stop monitoring (formerly "Stop overlay"), and a
+  2-minute sparkline tagged `GRAPH · 2 MIN` with a cycle
   button selecting CPU+GPU / CPU / GPU / BAT / FPS (battery in blue, FPS in
   purple on a fixed 0–120 scale).
   Three toggle chips (CPU/GPU / BAT / FPS) choose what the pill and notification
@@ -553,6 +554,15 @@ Defaults are chosen; change them now, not during implementation.
   value plus the max/min over the same 2-minute history as the sparkline. The
   HAL `cpuMax`/`gpuHot` values stay in the CSV but are no longer displayed;
   `hot` is gone from the card.
+- The card's RAM row sits after FPS and before the per-core line: used / total in
+  one-decimal decimal GB with a 4 dp full-width usage bar underneath (palette
+  grey track at low alpha, blue fill). It is read from
+  `ActivityManager.MemoryInfo` on the poll worker — `used = totalMem - availMem`,
+  no Shizuku or permission — so it updates even when the sensor reading is null.
+  A non-positive total or a throwing service call blanks the row to `—` and the
+  bar, without touching the poll, strip, recording, diagnostics or notification.
+  The bar is decorative for accessibility; the card description carries
+  `RAM 4.5 / 7.8 GB` or `RAM not available`.
 - The help screen's topics are collapsible cards; the version warning appears
   only when the manager version starts with `13.6.0` and the API is 36+
   (Android 16). Below 560 dp the status card scrolls with the list instead of

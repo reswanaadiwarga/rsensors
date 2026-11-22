@@ -25,6 +25,20 @@ class FormatTest {
   }
 
   @Test
+  fun `fmt ram shows one-decimal decimal gigabytes`() {
+    assertEquals("4.5 / 7.8 GB", fmtRam(4_500_000_000L, 7_800_000_000L))
+    assertEquals("0.0 / 8.0 GB", fmtRam(0L, 8_000_000_000L))
+  }
+
+  @Test
+  fun `fmt ram is a dash when unavailable`() {
+    assertEquals(DASH, fmtRam(null, 8_000_000_000L))
+    assertEquals(DASH, fmtRam(4_500_000_000L, null))
+    assertEquals(DASH, fmtRam(4_500_000_000L, 0L))
+    assertEquals(DASH, fmtRam(4_500_000_000L, -1L))
+  }
+
+  @Test
   fun `fmt age handles every band boundary`() {
     assertEquals("just now", fmtAge(-1_000L))
     assertEquals("just now", fmtAge(0L))

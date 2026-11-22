@@ -1,5 +1,6 @@
 package dev.rsensors.android.overlay
 
+import android.app.ActivityManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -22,6 +23,7 @@ import androidx.core.content.ContextCompat
 import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.ReadingHistory
+import dev.rsensors.android.core.RamUsage
 import dev.rsensors.android.core.Strip
 import dev.rsensors.android.core.VisibilityKind
 import dev.rsensors.android.core.iconSpec
@@ -198,6 +200,9 @@ class OverlayService : Service() {
       // touching temperatures, recording or the notification (ANDROID.md §9).
       val fps = pollFps()
       val reading = if (fps != null) base?.copy(fps = fps) else base
+      // System RAM is independent of the Shizuku source, so it is read every
+      // tick and survives a null reading; a failure only blanks the RAM row.
+      val ram = pollRam()
       // Diagnostics reads this on another thread; build the immutable snapshot
       // once per poll, including a poll that produced no reading, so the screen
       // can show the failure instead of a stale success (ANDROID.md §8 T7).
@@ -244,7 +249,7 @@ class OverlayService : Service() {
         current.setVisibility(visibility)
         current.setShizukuRunning(shizukuRunning)
         current.setStrip(strip, dotColorFor(reading))
-        current.setReading(reading, snapshot, now)
+        current.setReading(reading, snapshot, now, ram)
         updateNotification(strip, reading, now, shizukuRunning)
       }
       if (polling) {
@@ -271,6 +276,33 @@ class OverlayService : Service() {
       null
     }
   }
+
+  /**
+   * One system RAM sample for this poll, or null when the platform gives no
+   * usable total.
+   *
+   * Runs on the worker with the rest of the poll. [ActivityManager.MemoryInfo]
+   * needs no Shizuku, permission or shell route, which is why the card's RAM row
+   * keeps updating while the temperature source is down. A null result only
+   * empties the row and bar; it must never fail the poll, strip, recording,
+   * diagnostics snapshot or notification.
+   */
+  private fun pollRam(): RamUsage? =
+    try {
+      val info = ActivityManager.MemoryInfo()
+      getSystemService(ActivityManager::class.java).getMemoryInfo(info)
+      if (info.totalMem <= 0L) {
+        null
+      } else {
+        RamUsage(
+          usedBytes = (info.totalMem - info.availMem).coerceAtLeast(0L),
+          totalBytes = info.totalMem,
+        )
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "ram poll failed", e)
+      null
+    }
 
   /** Callbacks the panel raises; all arrive on the main thread. */
   private val viewCallbacks = object : OverlayView.Callbacks {

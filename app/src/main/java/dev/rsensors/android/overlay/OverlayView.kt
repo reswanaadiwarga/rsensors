@@ -22,6 +22,7 @@ import dev.rsensors.android.core.GPU_WARN
 import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.Level
 import dev.rsensors.android.core.PillVisibility
+import dev.rsensors.android.core.RamUsage
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.Segment
 import dev.rsensors.android.core.SegmentKind
@@ -30,6 +31,7 @@ import dev.rsensors.android.core.ThermalStatus
 import dev.rsensors.android.core.ValueRange
 import dev.rsensors.android.core.VisibilityKind
 import dev.rsensors.android.core.fmtFps
+import dev.rsensors.android.core.fmtRam
 import dev.rsensors.android.core.fmtTemp
 import dev.rsensors.android.core.fpsLevel
 import dev.rsensors.android.core.level
@@ -50,7 +52,8 @@ import kotlin.math.abs
  *   plus the 6dp source dot.
  * - The card is GONE while collapsed. It shows individual CPU, GPU and BAT
  *   rows, each with the 2-minute `max`/`min`, the thermal status word, the FPS,
- *   the per-core line, an optional board line, the `GRAPH · 2 MIN` sparkline
+ *   a system RAM row with a usage bar, the per-core line, an optional board
+ *   line, the `GRAPH · 2 MIN` sparkline
  *   with its own series selector, the CPU/GPU / BAT / FPS chips and Refresh /
  *   Diagnostics / Stop monitoring buttons (ANDROID.md §3, §8 T7, T15, T15b,
  *   T15i). The wordy source/age row is gone: the source lives in Diagnostics.
@@ -123,6 +126,8 @@ class OverlayView(
   private val batteryDetail = makeDetail()
   private val thermalValue = makeValue()
   private val fpsValue = makeValue()
+  private val ramValue = makeValue()
+  private val ramBar = RamBar(context)
   private val coresLine = makeDetail()
   private val boardLine = makeDetail()
   private val sparkline = SparklineView(context)
@@ -183,6 +188,9 @@ class OverlayView(
 
   /** Last sample, kept so a chip toggle can rebuild the card's description. */
   private var lastReading: Reading? = null
+
+  /** Last RAM sample; independent of [lastReading] and the Shizuku source. */
+  private var lastRam: RamUsage? = null
 
   /** Last 2-minute window, kept so the description can repeat the card's ranges. */
   private var lastHistory: List<Reading> = emptyList()
@@ -263,10 +271,14 @@ class OverlayView(
    *   value renders as an em dash rather than a guess
    * @param history readings inside the sparkline window, oldest first
    * @param now epoch millis, the right edge of the graph's time axis
+   * @param ram system memory for this poll, or null when unavailable; it is
+   *   independent of [reading], so the RAM row updates even when the sensor
+   *   source has no sample
    */
-  fun setReading(reading: Reading?, history: List<Reading>, now: Long) {
+  fun setReading(reading: Reading?, history: List<Reading>, now: Long, ram: RamUsage?) {
     lastReading = reading
     lastHistory = history
+    lastRam = ram
     val cpu = reading?.cpu
     setRow(
       cpuValue,
@@ -303,6 +315,12 @@ class OverlayView(
     val fps = reading?.fps
     fpsValue.text = fmtFps(fps)
     fpsValue.setTextColor(levelColor(fpsLevel(fps)))
+
+    // RAM does not come from the sensor chain: a missing Reading still leaves
+    // the row and bar free to show the ActivityManager figure (or a dash).
+    ramValue.text = fmtRam(ram?.usedBytes, ram?.totalBytes)
+    ramValue.setTextColor(Palette.white)
+    ramBar.fraction = ram?.fraction ?: 0f
 
     val cores = reading?.cores.orEmpty()
     coresLine.text = if (cores.isEmpty()) {
@@ -515,6 +533,15 @@ class OverlayView(
     card.addView(makeRow("BAT", batteryValue, batteryDetail))
     card.addView(makeRow("THRM", thermalValue, null))
     card.addView(makeRow("FPS", fpsValue, null))
+    card.addView(makeRow("RAM", ramValue, null))
+    // Full content width, directly under the RAM digits. The bar is its own
+    // view, so the row height stays governed by the monospace text.
+    card.addView(
+      ramBar,
+      LayoutParams(LayoutParams.MATCH_PARENT, dp(RAM_BAR_HEIGHT_DP)).apply {
+        topMargin = dp(RAM_BAR_GAP_DP)
+      },
+    )
     coresLine.setPadding(0, 0, 0, 0)
     boardLine.setPadding(0, 0, 0, 0)
     card.addView(coresLine)
@@ -768,8 +795,10 @@ class OverlayView(
     "max ${fmtTemp(range.max)} min ${fmtTemp(range.min)}"
 
   private fun buildCardDescription(reading: Reading?): String {
+    val ram = ramDescription()
     if (reading == null) {
-      return "Rsensors waiting for a reading, graph ${graphSeries.label}, 2 minutes, showing ${kindsSummary()}"
+      return "Rsensors waiting for a reading, $ram, graph ${graphSeries.label}, " +
+        "2 minutes, showing ${kindsSummary()}"
     }
     val cpuRange = lastHistory.valueRange { it.cpu }
     val gpuRange = lastHistory.valueRange { it.gpu }
@@ -786,6 +815,7 @@ class OverlayView(
       "battery min ${fmtTemp(batteryRange.min)}",
       "thermal ${reading.thermalStatus.name}",
       "FPS ${fmtFps(reading.fps)}",
+      ram,
     )
     parts += if (reading.cores.isEmpty()) {
       "per-core not available"
@@ -796,6 +826,15 @@ class OverlayView(
     parts += "showing ${kindsSummary()}"
     return parts.joinToString(", ")
   }
+
+  /**
+   * The RAM part of the card's accessibility text.
+   *
+   * Uses the same formatted figures as the row, or names the absence explicitly
+   * because an em dash read aloud is not a value.
+   */
+  private fun ramDescription(): String =
+    lastRam?.let { "RAM ${fmtRam(it.usedBytes, it.totalBytes)}" } ?: "RAM not available"
 
   /** The enabled kinds in pill order, for the card's accessibility text. */
   private fun kindsSummary(): String = buildList {
@@ -936,6 +975,10 @@ class OverlayView(
 
     /** Gap between the card's Refresh and Diagnostics buttons. */
     private const val BUTTON_GAP_DP = 6f
+
+    /** RAM usage bar: full content width, hairline height, tucked under its row. */
+    private const val RAM_BAR_HEIGHT_DP = 4f
+    private const val RAM_BAR_GAP_DP = 3f
 
     /** Board sensors shown on the compact line; the rest stay in Diagnostics. */
     private const val BOARD_MAX_ENTRIES = 3

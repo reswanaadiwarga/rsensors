@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added a system RAM row to the expanded card: used / total in one-decimal GB
+  with a compact usage bar. It reads `ActivityManager.MemoryInfo` on the normal
+  poll, needs no Shizuku or extra permission, and keeps updating when the
+  temperature reading is unavailable; a missing figure renders `—` with an empty
+  bar.
+
 ## 0.2.0 — 2026-11-22
 
 - Added foreground FPS through Shizuku/SurfaceFlinger, with a 0–120 axis in the
