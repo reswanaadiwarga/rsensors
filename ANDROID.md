@@ -4,10 +4,11 @@ Development design and task log. Public overview: [README.md](README.md);
 architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
-Status: **T0-T16 complete. The 0.2.0 release is installed and device-verified
-(214 tests); the repository is staged with an initial local commit and no
-remote/push.** This file is the source of truth for the app; change it before
-changing code.
+Status: **T0-T17 complete.** The RAM pill and process-memory page are committed
+on `feat/process-ram` and installed/device-verified on the target (250 tests).
+The 0.2.0 release remains the published baseline and does not include these
+changes; nothing is merged or pushed yet. This file is the source of truth for
+the app; change it before changing code.
 
 ## 1. Goal
 
@@ -434,9 +435,10 @@ release. T17 adds the process-memory page after the RAM row and pill.
 | T15i ✅ | Combined pill + card min/max | Pill becomes `CPU/GPU 41° BAT 34° FPS 60`; CPU/GPU is the hotter sensor, coloured by the worse level; chips become CPU/GPU / BAT / FPS; card keeps individual CPU/GPU/BAT rows with 2-minute max/min; `hot` and the HAL max display are removed; 208 tests; device-verified (70° amber via the GPU warn level; Shizuku down shows `CPU/GPU — BAT 35° FPS —`) |
 | T15j ✅ | No-device quality pass | Version warning extracted to `core/ShizukuCompat.kt` with 6 tests; corrupt T15h PNGs removed; 0.2.0 notes/checklist drafted; no behaviour change; 214 tests; no device |
 | T16 ✅ | Release 0.2.0 | Installed and device-verified: versionCode 2 / 0.2.0, R8 + shrinking, 1,105,888 B, SHA-256 `4232C96E…EA0023`, v2 debug-signed. The Shizuku UserService/FPS path survives R8, the pill/card/guide/session graph/notification work, recording is v2, and the degraded `CPU/GPU — BAT 36° FPS —` prompt plus `Shizuku help` action recover after a server restart. 214 tests. |
-| T17 | Process memory page | RAM row opens a second page in the expanded card; `dumpsys meminfo --oom` PSS parsed shell-side; `Apps` groups by package and hides `Native`/`System`, `Processes` shows every row; 8 per page with prev/next; `Back`/`Refresh`; on-open + manual scans only; card 280 dp and restores 220 dp on back; no new permissions; unavailable state without Shizuku and in demo mode; parser fixtures; the pill keeps polling during a scan; device-verified |
+| T17 ✅ | Process memory page | RAM row opens a second page in the expanded card; `dumpsys meminfo --oom` PSS parsed shell-side; `Apps` groups by package and hides `Native`/`System`, `Processes` shows every row; 8 per page with prev/next; `Back`/`Refresh`; on-open + manual scans only; card 280 dp and restores 220 dp on back; no new permissions; unavailable state without Shizuku and in demo mode; parser fixtures; the pill keeps polling during a scan; 250 tests; device-verified: Apps 82 / Processes 270 rows sorted by PSS, pager `1–8`/`9–16`, Refresh scans, no-Shizuku state + Start Shizuku, recovery after `start.sh`, and the header keeps all four metrics + dot (10 sp card / 12 sp page) |
 
-T17 is the current task; T0-T16 are complete.
+T0-T17 are complete. T17 is committed on `feat/process-ram`; the RAM pill and
+process page are not merged or pushed.
 
 ### T17 process-memory probe (2026-11-23)
 
@@ -625,6 +627,18 @@ Defaults are chosen; change them now, not during implementation.
   full-screen list in v1. The page never invents data: no Shizuku, demo mode or
   a parse failure shows an unavailable/error state. The card's `used / total`
   is `MemoryInfo`; the rows are PSS, so the footer labels the list `PSS`.
+- The telemetry header steps its text size down with the available width:
+  14 sp collapsed, 10 sp in the 220 dp card and 12 sp on the 280 dp page. At
+  14 sp the four metrics plus the source dot overflowed the card/page and
+  clipped the RAM value/dot; the source dot is now always inside the panel.
+  `Apps` labels come from `PackageManager` only when the package is visible to
+  the app; the package/process name is the fallback, and package visibility is
+  deliberately not broadened.
+- A scan result is accepted only while the page is open and its generation
+  still matches. Closing the page, a newer Refresh and screen-off invalidate
+  the generation; screen-off restores the last snapshot (or a `Scan cancelled`
+  error) so waking never finds a permanent `Scanning processes…`, and there is
+  no automatic scan on wake.
 - The AIDL adds `runMeminfo() = 3` and bumps the UserService registration to
   `version(4)` so a stale v3 shell process cannot answer the new transaction.
   The UserService runs `/system/bin/dumpsys meminfo --oom` and returns stdout;

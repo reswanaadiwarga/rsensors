@@ -1,8 +1,8 @@
 # Rsensors
 
-A floating overlay for Android that shows live CPU/GPU/battery temperatures and
-the foreground app's frame rate. CPU/GPU and FPS access use
-[Shizuku](https://shizuku.rikka.app/).
+A floating overlay for Android that shows live CPU/GPU/battery temperatures, the
+foreground app's frame rate, and per-app memory usage. CPU/GPU, FPS and process
+memory access use [Shizuku](https://shizuku.rikka.app/).
 
 ![Collapsed pill and expanded card](docs/images/overlay.png)
 
@@ -18,6 +18,12 @@ the foreground app's frame rate. CPU/GPU and FPS access use
   used/total with a compact usage bar; a 2-minute sparkline with a
   `CPU+GPU / CPU / GPU / BAT / FPS` selector; and CPU/GPU / BAT / FPS / RAM
   chips that choose what the pill and notification show.
+- **Process memory**: tap the card's RAM row for a paged list of the top memory
+  consumers from the platform memory service, eight per page. `Apps` groups by
+  package and hides native/system rows; `Processes` shows every process.
+  `Refresh` takes a new snapshot; `Back` returns to the card. The normal pill
+  keeps updating while the page is open. Without Shizuku the page explains why
+  it is unavailable and offers the setup action.
 - **Real temperatures**: CPU/GPU from the platform thermal service through
   Shizuku; battery temperature and thermal status from Android. Missing sensors
   render `—`, never another sensor's value.
@@ -51,12 +57,13 @@ the foreground app's frame rate. CPU/GPU and FPS access use
 | | |
 |---|---|
 | Android | 8.0 (API 26) or newer; target API 36 |
-| Shizuku | required for CPU/GPU temperatures and FPS |
+| Shizuku | required for CPU/GPU temperatures, FPS and process memory |
 | Permissions | display over other apps, notifications |
 | Tested device | POCO X7 Pro, Android 16 / HyperOS |
 | Tested Shizuku | 13.5.4 |
 
-Battery temperature and thermal status work without Shizuku. On the tested
+Battery temperature, thermal status and the system RAM card work without
+Shizuku. On the tested
 device, Shizuku 13.6.0 fails to start its UserService (upstream issue
 [#2633](https://github.com/RikkaApps/Shizuku/issues/2633)); 13.5.4 is the
 working version there. Other devices and versions may differ.

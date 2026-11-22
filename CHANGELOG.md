@@ -13,6 +13,13 @@
   all four. RAM is independent of the sensor reading, so a missing temperature
   sample still shows the RAM value without dimming the strip; an unavailable
   figure renders `RAM —`.
+- Added the process-memory page: the expanded card's RAM row opens a paged list
+  of PSS consumers from `dumpsys meminfo --oom` through Shizuku. `Apps` groups
+  by package and hides Native/System, `Processes` shows every process, eight
+  rows per page, with `Back` and `Refresh`. The scan runs on its own thread and
+  the normal poll keeps updating; without Shizuku the page shows a Start
+  Shizuku state instead of stale data. The expanded header now scales to fit
+  all four metrics and the source dot.
 
 ## 0.2.0 — 2026-11-22
 

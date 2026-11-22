@@ -8,10 +8,10 @@ diagnostics and the Shizuku guide.
 
 | Package | Responsibility |
 |---|---|
-| `core/` | pure Kotlin: `Reading`, thresholds, pill segments, formatting, FPS parsing, CSV sessions, chart geometry, visibility, ranges, Shizuku version predicate |
+| `core/` | pure Kotlin: `Reading`, thresholds, pill segments, formatting, FPS parsing, CSV sessions, chart geometry, visibility, ranges, process-memory PSS parsing/grouping/paging, Shizuku version predicate |
 | `source/` | sensor sources, the source chain, the Shizuku runner, session storage |
 | `shizuku/` | `DumpsysUserService` and the AIDL contract executed as the shell user |
-| `overlay/` | foreground service, window, pill/card views, notification, recording, preferences |
+| `overlay/` | foreground service, window, pill/card/process-page views, notification, recording, preferences |
 | `ui/` | Compose activities: main, sessions, session detail, diagnostics, setup guide |
 
 ## Data flow
@@ -35,9 +35,18 @@ OverlayService (foreground service)
         +--> ReadingHistory (120 samples, in memory)
         +--> SessionRecorder (CSV v2, one row per poll)
         +--> ReadingStore (Diagnostics snapshot)
+        +--> process page summary/age (snapshot list stays on demand)
+
+OverlayService
+  meminfo thread: dumpsys meminfo --oom on page open / Refresh
+        |
+        v
+  ProcessMemory parser -> Apps/Processes rows -> eight-row pager
 ```
 
-Screen-off pauses polling and recording; screen-on resumes immediately.
+Screen-off pauses polling and recording; screen-on resumes immediately. A
+process-memory scan in flight is invalidated on screen-off and the page falls
+back to its last snapshot (or a retryable error).
 
 ## Sources
 
@@ -91,11 +100,11 @@ be opened or deleted. Deletion is permanent and confirmed.
 ## Shizuku
 
 `ShizukuDumpsysRunner` binds `DumpsysUserService` with
-`Shizuku.bindUserService` (tag `dumpsys`, version 3). The AIDL exposes
-`runDumpsys()` and `runFps()`. The service executes absolute `/system/bin/dumpsys`
-commands and returns compact strings; the app catches every binder failure and
-falls back to the next source. The R8 keep rule is
-`dev.rsensors.android.shizuku.**` because Shizuku starts the class by name.
+`Shizuku.bindUserService` (tag `dumpsys`, version 4). The AIDL exposes
+`runDumpsys()`, `runFps()` and `runMeminfo()`. The service executes absolute
+`/system/bin/dumpsys` commands and returns stdout/compact strings; the app
+catches every binder failure and falls back to the next source. The R8 keep rule
+is `dev.rsensors.android.shizuku.**` because Shizuku starts the class by name.
 
 On the tested POCO X7 Pro / Android 16, Shizuku 13.6.0 fails to start a
 UserService (upstream issue #2633); 13.5.4 works. The setup guide warns about
@@ -106,12 +115,14 @@ that combination and points at Diagnostics for the version.
 - `SYSTEM_ALERT_WINDOW`, foreground-service permissions, notifications and boot
   completed. No `INTERNET`, accessibility, screen capture or root.
 - Session files and preferences are app-private.
-- The Shizuku UserService runs as the shell user only for the two dumps.
+- The Shizuku UserService runs as the shell user only for the thermal, FPS and
+  meminfo dumps. Process memory is a snapshot taken on demand, never part of
+  the 2 s poll.
 
 ## Tests
 
 Pure logic is covered by JVM tests: formatting, thresholds, segments, FPS
 parsing/freshness, CSV v1/v2, session chart geometry, zone mapping, visibility,
-ranges, and the version predicate. The suite is independent of a device.
-Overlay, Shizuku, recording and UI behaviour are checked manually on the target
-phone; see `docs/BUILDING.md`.
+ranges, process-memory PSS parsing/grouping/paging, and the version predicate.
+The suite is independent of a device. Overlay, Shizuku, recording and UI
+behaviour are checked manually on the target phone; see `docs/BUILDING.md`.
