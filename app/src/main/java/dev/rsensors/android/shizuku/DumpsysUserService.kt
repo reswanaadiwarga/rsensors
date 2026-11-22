@@ -14,7 +14,7 @@ import java.io.IOException
 
 /**
  * Shell-side half of the tier-1 source: runs `dumpsys` as the shell UID
- * (ANDROID.md §5, §9, §8 T14).
+ * (ANDROID.md §5, §9, §8 T14, §8 T17).
  *
  * Shizuku starts this class with `app_process` inside a process owned by the
  * shell user, so it has no app context and no UI. [runDumpsys] spawns one
@@ -22,7 +22,9 @@ import java.io.IOException
  * [dev.rsensors.android.core.parseDumpsysThermal]. [runFps] resolves the focused
  * activity's SurfaceFlinger layer and measures its frame rate with
  * `dumpsys SurfaceFlinger --list/--latency`, returning the one-line reply the
- * app parses with [dev.rsensors.android.core.parseFpsReply].
+ * app parses with [dev.rsensors.android.core.parseFpsReply]. [runMeminfo] runs
+ * `dumpsys meminfo --oom` and returns its raw stdout for the T17 process page
+ * ([dev.rsensors.android.core.parseMeminfoPss]).
  *
  * `dumpsys` is invoked by absolute path because a UserService process does not
  * inherit the app's PATH; relying on a bare `dumpsys` was a silent
@@ -111,6 +113,30 @@ class DumpsysUserService : IDumpsysService.Stub {
     } catch (e: Exception) {
       Log.w(TAG, "runFps failed", e)
       "ERR " + shortReason(e)
+    }
+  }
+
+  /**
+   * Returns the raw `dumpsys meminfo --oom` dump for the T17 process page.
+   *
+   * Uses the shared [runDumpsys] helper so process execution and the
+   * read-to-EOF-before-wait ordering live in one place. The dump takes ~2 s on
+   * the target, which is why the app requests it on page open and on Refresh
+   * rather than from the 2 s poll.
+   *
+   * @return stdout verbatim; the pure parser trims and splits it
+   * @throws java.io.IOException when the process cannot start or be read, or
+   *   exits non-zero
+   */
+  override fun runMeminfo(): String {
+    Log.i(TAG, "runMeminfo start")
+    return try {
+      val output = runDumpsys("meminfo", "--oom")
+      Log.i(TAG, "runMeminfo end chars=${output.length}")
+      output
+    } catch (e: Exception) {
+      Log.w(TAG, "runMeminfo failed", e)
+      throw e
     }
   }
 

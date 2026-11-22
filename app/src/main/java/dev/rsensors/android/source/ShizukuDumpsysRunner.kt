@@ -14,31 +14,37 @@ import dev.rsensors.android.shizuku.IDumpsysService
 import rikka.shizuku.Shizuku
 
 /**
- * [DumpsysRunner] and [FpsRunner] backed by one Shizuku UserService
- * (ANDROID.md §5, §9, §8 T14).
+ * [DumpsysRunner], [FpsRunner] and [MeminfoRunner] backed by one Shizuku
+ * UserService (ANDROID.md §5, §9, §8 T14, §8 T17).
  *
  * Shizuku 13 no longer exposes a process API, so the work runs inside
  * [DumpsysUserService] — a process Shizuku starts as the shell UID — and this
  * runner only binds to it and calls [IDumpsysService.runDumpsys] /
- * [IDumpsysService.runFps]. Both calls share the binding: `dumpsys window`,
- * `--list` and `--latency` must run in the same shell process as the thermal
- * dump. Binding is lazy and self-healing: the first call after a granted
- * permission starts a bind and yields null for that poll, later polls use the
- * live service, and any failure clears the reference so the next poll binds
- * again. That is what makes killing and restarting the Shizuku server
- * recoverable without a restart (ANDROID.md §8 T8).
+ * [IDumpsysService.runFps] / [IDumpsysService.runMeminfo]. All calls share the
+ * binding: `dumpsys window`, `--list`, `--latency` and the meminfo dump must run
+ * in the same shell process as the thermal dump. Binding is lazy and
+ * self-healing: the first call after a granted permission starts a bind and
+ * yields null for that poll, later polls use the live service, and any failure
+ * clears the reference so the next poll binds again. That is what makes killing
+ * and restarting the Shizuku server recoverable without a restart
+ * (ANDROID.md §8 T8).
  *
- * Every Shizuku call is wrapped: the poller must never see a RemoteException, a
- * dead binder, a missing provider or a denied permission as a crash. All of
- * them mean "no dump / no FPS this poll", and the chain falls back to
- * battery/status while the temperature poll continues.
+ * Every Shizuku call is wrapped: the poller and the process-page scan must never
+ * see a RemoteException, a dead binder, a missing provider or a denied
+ * permission as a crash. All of them mean "no dump / no FPS / no meminfo this
+ * call", and the chain falls back to battery/status while the temperature poll
+ * continues.
  *
- * Threading: [run] and [runFps] are called on the poller's worker thread while
- * the connection callbacks arrive on the main thread. The binder calls
- * themselves (`pingBinder`, `checkSelfPermission`, `bindUserService`) are posted
- * to the main looper, matching the official demo and avoiding any binder-context
- * assumption; the worker never blocks waiting for them. [service], [binding]
- * and [bindStartedAt] are therefore volatile. [close] runs on the worker.
+ * Threading: [run] and [runFps] are called on the poller's worker thread and
+ * [runMeminfo] on the process page's own scan thread, while the connection
+ * callbacks arrive on the main thread. The binder calls themselves
+ * (`pingBinder`, `checkSelfPermission`, `bindUserService`) are posted to the
+ * main looper, matching the official demo and avoiding any binder-context
+ * assumption; the workers never block waiting for them. [service] stays
+ * volatile so calls can read the live reference without taking the lock, while
+ * every bind-state transition ([binding], [bindStartedAt]) is guarded by
+ * [bindLock] so two callers cannot post duplicate bind requests. [close] runs
+ * on the poller's worker.
  *
  * A bind that never connects is abandoned after [BIND_TIMEOUT_MS] so a stale
  * Shizuku registration cannot wedge the source forever; the next poll retries.
@@ -46,7 +52,7 @@ import rikka.shizuku.Shizuku
  * @param context application context; its package name addresses the
  *   UserService component and the provider authority
  */
-class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
+class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner, MeminfoRunner {
   private val appContext = context.applicationContext
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -55,8 +61,9 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
    * Binding descriptor for the UserService.
    *
    * `daemon(false)` because the OS may reclaim an idle service between polls;
-   * `version(3)` forces a fresh registration after the T14 AIDL added `runFps`,
-   * so a stale v2 shell process cannot answer the new transaction;
+   * `version(4)` forces a fresh registration after the T17 AIDL added
+   * `runMeminfo`, so a stale v3 shell process cannot answer the new
+   * transaction;
    * `tag("dumpsys")` keeps that record addressable; `debuggable(false)` keeps
    * the shell-side process un-debuggable in release and debug builds alike.
    */
@@ -67,10 +74,17 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
     .processNameSuffix("dumpsys")
     .tag(TAG_NAME)
     .debuggable(false)
-    .version(3)
+    .version(4)
 
   /** Live binding, or null while unbound; written on both threads. */
   @Volatile private var service: IDumpsysService? = null
+
+  /**
+   * Guards the bind-state transitions among the poller worker, the process-page
+   * scan thread and the main-thread callbacks. Never held across a Shizuku
+   * binder call; [service] stays readable without it.
+   */
+  private val bindLock = Any()
 
   /** True between a posted bind request and its connection callback. */
   @Volatile private var binding = false
@@ -78,19 +92,31 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
   /** Uptime of the current bind request, or 0 when no bind is in flight. */
   @Volatile private var bindStartedAt = 0L
 
+  /**
+   * Id of the newest bind request, guarded by [bindLock]. A queued or running
+   * [bindOnMain] carries the id it was posted with, so a request abandoned by a
+   * timeout or cleared by a failure cannot bind on behalf of a newer one.
+   */
+  private var bindGeneration = 0L
+
   private val connection = object : ServiceConnection {
     override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
       Log.i(TAG, "onServiceConnected binder=${binder != null}")
-      service = binder?.let { IDumpsysService.Stub.asInterface(it) }
-      binding = false
-      bindStartedAt = 0L
+      val bound = binder?.let { IDumpsysService.Stub.asInterface(it) }
+      synchronized(bindLock) {
+        service = bound
+        binding = false
+        bindStartedAt = 0L
+      }
     }
 
     override fun onServiceDisconnected(name: ComponentName?) {
       Log.i(TAG, "onServiceDisconnected")
-      service = null
-      binding = false
-      bindStartedAt = 0L
+      synchronized(bindLock) {
+        service = null
+        binding = false
+        bindStartedAt = 0L
+      }
     }
   }
 
@@ -142,39 +168,83 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
     }
   }
 
-  /** Drops the live reference so the next call rebinds; worker-side only. */
+  /**
+   * Runs one memory dump through the same shell process as [run].
+   *
+   * Called from the process page's scan thread, not the 2 s poll, so it may
+   * take ~2 s.
+   *
+   * @return the raw `dumpsys meminfo --oom` stdout, or null on any Shizuku or
+   *   binder failure; the temperature poll must survive a failed scan
+   */
+  override fun runMeminfo(): String? {
+    val current = service
+    if (current == null) {
+      Log.d(TAG, "runMeminfo: no UserService (binding=$binding)")
+      abandonTimedOutBind()
+      tryBind()
+      return null
+    }
+    return try {
+      Log.d(TAG, "runMeminfo call")
+      val dump = current.runMeminfo()
+      Log.d(TAG, "runMeminfo returned ${dump.length} chars")
+      dump
+    } catch (e: Exception) {
+      Log.w(TAG, "runMeminfo failed", e)
+      forgetService()
+      null
+    }
+  }
+
+  /** Drops the live reference so the next call rebinds. */
   private fun forgetService() {
-    service = null
-    binding = false
-    bindStartedAt = 0L
+    synchronized(bindLock) {
+      service = null
+      binding = false
+      bindStartedAt = 0L
+      bindGeneration += 1
+    }
   }
 
   /**
    * Requests a bind when Shizuku is reachable and this app is allowed.
    *
    * The request is only posted here; the binder calls run on the main thread in
-   * [bindOnMain]. [binding] is set before posting so overlapping polls cannot
-   * queue duplicates. Silent by construction: not running, not granted, or a
-   * throwing binder call all just leave the runner unbound for this poll.
+   * [bindOnMain]. [binding] is set under [bindLock] before posting so the
+   * poller and the scan thread cannot queue duplicates. Silent by
+   * construction: not running, not granted, or a throwing binder call all just
+   * leave the runner unbound for this call.
    */
   private fun tryBind() {
-    if (binding) return
-    binding = true
-    bindStartedAt = SystemClock.elapsedRealtime()
-    if (!mainHandler.post(::bindOnMain)) {
+    val generation =
+      synchronized(bindLock) {
+        if (binding) return
+        binding = true
+        bindStartedAt = SystemClock.elapsedRealtime()
+        bindGeneration += 1
+        bindGeneration
+      }
+    if (!mainHandler.post { bindOnMain(generation) }) {
       Log.w(TAG, "main looper rejected bind; will retry next poll")
-      binding = false
-      bindStartedAt = 0L
+      cancelBind(generation)
     }
   }
 
   /**
    * Main-thread half of [tryBind]: pings Shizuku, checks the grant and asks for
    * the UserService. Logs every outcome; nothing here may reach the poller.
+   *
+   * @param generation id captured by [tryBind]; anything else means this
+   *   request was abandoned while it waited in the queue
+   *
+   * The binder calls run outside [bindLock] so a slow Shizuku cannot stall the
+   * scan thread; only the flag transitions are synchronized.
    */
-  private fun bindOnMain() {
+  private fun bindOnMain(generation: Long) {
     // A timeout may have cancelled this request while it sat in the queue.
-    if (!binding) {
+    val requested = synchronized(bindLock) { binding && bindGeneration == generation }
+    if (!requested) {
       Log.d(TAG, "bind request cancelled before it ran")
       return
     }
@@ -187,8 +257,7 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
     }
     Log.i(TAG, "pingBinder=$running")
     if (!running) {
-      binding = false
-      bindStartedAt = 0L
+      cancelBind(generation)
       return
     }
 
@@ -200,18 +269,40 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
     }
     Log.i(TAG, "checkSelfPermission granted=$granted")
     if (!granted) {
-      binding = false
-      bindStartedAt = 0L
+      cancelBind(generation)
+      return
+    }
+
+    // Another caller may have forgotten the service while the checks ran; a
+    // cancelled request must not start a bind the new owner does not expect.
+    val current = synchronized(bindLock) { binding && bindGeneration == generation }
+    if (!current) {
+      Log.d(TAG, "bind request cancelled before bindUserService")
       return
     }
 
     try {
-      Log.i(TAG, "bindUserService version=3 tag=$TAG_NAME")
+      Log.i(TAG, "bindUserService version=4 tag=$TAG_NAME")
       Shizuku.bindUserService(args, connection)
-      bindStartedAt = SystemClock.elapsedRealtime()
+      synchronized(bindLock) {
+        // The connection may already have fired while bindUserService ran; do
+        // not resurrect a cleared request with a timestamp a timeout would
+        // count.
+        if (binding && bindGeneration == generation) {
+          bindStartedAt = SystemClock.elapsedRealtime()
+        }
+      }
       Log.i(TAG, "bindUserService requested")
     } catch (e: Exception) {
       Log.w(TAG, "bindUserService threw", e)
+      cancelBind(generation)
+    }
+  }
+
+  /** Cancels [generation]'s pending request, unless a newer one replaced it. */
+  private fun cancelBind(generation: Long) {
+    synchronized(bindLock) {
+      if (bindGeneration != generation) return
       binding = false
       bindStartedAt = 0L
     }
@@ -219,14 +310,18 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
 
   /** Clears a bind that stayed in flight past [BIND_TIMEOUT_MS]. */
   private fun abandonTimedOutBind() {
-    if (!binding) return
-    val started = bindStartedAt
-    if (started == 0L) return
-    val waited = SystemClock.elapsedRealtime() - started
-    if (waited <= BIND_TIMEOUT_MS) return
-    Log.w(TAG, "bind not connected after $waited ms; resetting for retry")
-    binding = false
-    bindStartedAt = 0L
+    synchronized(bindLock) {
+      if (!binding) return
+      val started = bindStartedAt
+      if (started == 0L) return
+      val waited = SystemClock.elapsedRealtime() - started
+      if (waited <= BIND_TIMEOUT_MS) return
+      Log.w(TAG, "bind not connected after $waited ms; resetting for retry")
+      binding = false
+      bindStartedAt = 0L
+      // Invalidate the abandoned request so it cannot bind for the retry.
+      bindGeneration += 1
+    }
   }
 
   /** Unbinds and forgets the service; safe to call when nothing is bound. */
@@ -238,9 +333,7 @@ class ShizukuDumpsysRunner(context: Context) : DumpsysRunner, FpsRunner {
       // Server already gone or never bound; nothing left to release.
       Log.w(TAG, "unbindUserService threw", e)
     }
-    service = null
-    binding = false
-    bindStartedAt = 0L
+    forgetService()
   }
 
   companion object {
