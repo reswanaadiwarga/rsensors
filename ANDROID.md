@@ -84,9 +84,10 @@ nice-to-haves:
 
 ## 3. Product behaviour
 
-- **Collapsed pill** (default): `CPU/GPU 41°  BAT 34°  FPS 60`, plus a small
-  source dot. CPU/GPU is the hotter of the two SoC sensors, coloured by the
-  worse of their levels; BAT is a first-class metric, not only a fallback.
+- **Collapsed pill** (default): `CPU/GPU 41°  BAT 34°  FPS 60  RAM 8.6G`, plus
+  a small source dot. CPU/GPU is the hotter of the two SoC sensors, coloured by
+  the worse of their levels; BAT is a first-class metric, not only a fallback;
+  RAM is used-only decimal GB in blue.
   Palette: dark background, green / amber / red
   digits, dim when stale (15 s) and `—` when unknown. The dot is green for
   dumpsys/Shizuku, amber for sysfs, and gray for the battery/status fallback.
@@ -97,9 +98,9 @@ nice-to-haves:
   2-minute sparkline tagged `GRAPH · 2 MIN` with a cycle
   button selecting CPU+GPU / CPU / GPU / BAT / FPS (battery in blue, FPS in
   purple on a fixed 0–120 scale).
-  Three toggle chips (CPU/GPU / BAT / FPS) choose what the pill and notification
-  show; at least one stays on. The card keeps its detail rows. The graph
-  selector is independent of the chips, and the in-memory history always
+  Four toggle chips (CPU/GPU / BAT / FPS / RAM) choose what the pill and
+  notification show; at least one stays on. The card keeps its detail rows. The
+  graph selector is independent of the chips, and the in-memory history always
   records CPU, GPU, BAT and FPS regardless of either choice. The wordy source/age line is gone — the source
   lives in Diagnostics. On the target phone the per-core list is empty (no
   sensors); show `per-core n/a` instead of an empty section.
@@ -195,7 +196,7 @@ app/src/main/java/dev/rsensors/android/
     SessionRecorder.kt      CSV writer owned by the poller
     OverlayParams.kt        WindowManager.LayoutParams helpers
     OverlayPreferences.kt   SharedPreferences: demo, position, expanded, boot,
-                            CPU/GPU/FPS visibility
+                            CPU/GPU/BAT/FPS/RAM visibility
   ui/
     MainActivity.kt         permission flow, start/stop, settings
     SessionsActivity.kt     saved session list
@@ -222,7 +223,7 @@ Decisions:
 
 - **Classic Views for the overlay**, Compose only for the two activities.
   Compose inside a `WindowManager` overlay needs manual lifecycle/saved-state
-  owners; the pill is four `TextView`s and does not justify that.
+  owners; the pill is a handful of `TextView`s and does not justify that.
 - **One reader abstraction** (`SysfsReader`) so direct and Shizuku reads share
   the same paths. Direct is a `File` reader; Shizuku is added without touching
   `SysfsSource` or the mapper.
@@ -547,9 +548,16 @@ Defaults are chosen; change them now, not during implementation.
   main-screen source note and the column-help dialogs say "thermal sensors" /
   "thermal service", never "thermal HAL" or "dumpsys".
 - The pill shows `CPU/GPU` as the hotter of the two SoC values, coloured by the
-  worse level; BAT is its own first-class metric. The three chips
-  (CPU/GPU, BAT, FPS) persist as `show_cpugpu`, `show_bat`, `show_fps`; the old
-  `show_cpu`/`show_gpu` keys are ignored. At least one chip stays on.
+  worse level; BAT is its own first-class metric. The four chips
+  (CPU/GPU, BAT, FPS, RAM) persist as `show_cpugpu`, `show_bat`, `show_fps`,
+  `show_ram`; the old `show_cpu`/`show_gpu` keys are ignored. At least one chip
+  stays on.
+- RAM is a pill segment after FPS, `RAM 8.6G`, used-only decimal GB with one
+  decimal (`—` when unavailable) and `SegmentKind.INFO` mapped to the same blue
+  as the card's RAM bar. It comes from the card's `ActivityManager.MemoryInfo`
+  sample, so it needs no Shizuku and survives a null reading: with a live RAM
+  figure the strip is not dimmed, while the missing sensor values stay dashes.
+  When the reading exists, RAM dims with the strip under the usual stale rule.
 - The card keeps CPU, GPU and BAT as individual rows; each shows the current
   value plus the max/min over the same 2-minute history as the sparkline. The
   HAL `cpuMax`/`gpuHot` values stay in the CSV but are no longer displayed;
@@ -724,7 +732,7 @@ Changes since 0.1.0:
   FPS selector; the history always records all of them; the pill chips are
   independent.
 - **Pill**: `CPU/GPU` (the hotter SoC value, worse level), `BAT` as a
-  first-class metric, `FPS`; chips CPU/GPU / BAT / FPS.
+  first-class metric, `FPS`, `RAM`; chips CPU/GPU / BAT / FPS / RAM.
 - **Card**: individual CPU/GPU/BAT rows with 2-minute max/min; `hot` and the
   HAL max display removed (the CSV keeps the fields).
 - **Sessions**: legend focus (dim + restack, newest highlight on top), column

@@ -9,10 +9,11 @@ import dev.rsensors.android.core.PillVisibility
  * Persisted overlay settings (ANDROID.md §4: SharedPreferences, no DataStore).
  *
  * Holds the demo switch, the window position in pixels, the collapsed /
- * expanded state, which kinds the pill shows (CPU/GPU / BAT / FPS chips), the
- * sparkline's graph series, and whether [dev.rsensors.android.boot.BootReceiver]
- * should start the overlay after a reboot (ANDROID.md §8 T9, T10, T15, T15b,
- * T15i). Position is only written when a drag settles, not on every frame.
+ * expanded state, which kinds the pill shows (CPU/GPU / BAT / FPS / RAM chips),
+ * the sparkline's graph series, and whether
+ * [dev.rsensors.android.boot.BootReceiver] should start the overlay after a
+ * reboot (ANDROID.md §8 T9, T10, T15, T15b, T15i). Position is only written when
+ * a drag settles, not on every frame.
  *
  * All access is synchronous on the calling thread; values are tiny and reads
  * are cached by the framework, so the UI may read them during composition. The
@@ -29,6 +30,7 @@ object OverlayPreferences {
   private const val KEY_SHOW_CPUGPU = "show_cpugpu"
   private const val KEY_SHOW_BAT = "show_bat"
   private const val KEY_SHOW_FPS = "show_fps"
+  private const val KEY_SHOW_RAM = "show_ram"
   private const val KEY_GRAPH_SERIES = "graph_series"
 
   /** Sentinel for "no saved position"; the caller falls back to the defaults. */
@@ -100,6 +102,7 @@ object OverlayPreferences {
       cpuGpu = prefs.getBoolean(KEY_SHOW_CPUGPU, true),
       bat = prefs.getBoolean(KEY_SHOW_BAT, true),
       fps = prefs.getBoolean(KEY_SHOW_FPS, true),
+      ram = prefs.getBoolean(KEY_SHOW_RAM, true),
     ).normalised()
   }
 
@@ -115,6 +118,7 @@ object OverlayPreferences {
       putBoolean(KEY_SHOW_CPUGPU, stored.cpuGpu)
       putBoolean(KEY_SHOW_BAT, stored.bat)
       putBoolean(KEY_SHOW_FPS, stored.fps)
+      putBoolean(KEY_SHOW_RAM, stored.ram)
     }
   }
 

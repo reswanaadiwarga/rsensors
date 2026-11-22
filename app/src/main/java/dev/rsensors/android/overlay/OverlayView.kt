@@ -54,9 +54,10 @@ import kotlin.math.abs
  *   rows, each with the 2-minute `max`/`min`, the thermal status word, the FPS,
  *   a system RAM row with a usage bar, the per-core line, an optional board
  *   line, the `GRAPH · 2 MIN` sparkline
- *   with its own series selector, the CPU/GPU / BAT / FPS chips and Refresh /
- *   Diagnostics / Stop monitoring buttons (ANDROID.md §3, §8 T7, T15, T15b,
- *   T15i). The wordy source/age row is gone: the source lives in Diagnostics.
+ *   with its own series selector, the CPU/GPU / BAT / FPS / RAM chips and
+ *   Refresh / Diagnostics / Stop monitoring buttons (ANDROID.md §3, §8 T7, T15,
+ *   T15b, T15i). The wordy source/age row is gone: the source lives in
+ *   Diagnostics.
  *   The chips drive the pill and notification only; the graph selector is
  *   independent of them.
  * - Tap toggles the card, long-press opens the app, drag moves the window and
@@ -90,7 +91,7 @@ class OverlayView(
     /** The card's Diagnostics button was pressed. */
     fun onDiagnostics()
 
-    /** A CPU/GPU / BAT / FPS chip was pressed; the service owns the state. */
+    /** A CPU/GPU / BAT / FPS / RAM chip was pressed; the service owns the state. */
     fun onVisibilityToggled(kind: VisibilityKind)
 
     /** The card's graph selector was pressed; the argument is already cycled. */
@@ -138,6 +139,7 @@ class OverlayView(
   private val cpuGpuChip = makeChip("CPU/GPU", VisibilityKind.CPUGPU)
   private val batChip = makeChip("BAT", VisibilityKind.BAT)
   private val fpsChip = makeChip("FPS", VisibilityKind.FPS)
+  private val ramChip = makeChip("RAM", VisibilityKind.RAM)
 
   /** Sparkline selector state; the header button shows its label. */
   private var graphSeries = GraphSeries.CPU_GPU
@@ -360,6 +362,7 @@ class OverlayView(
     styleChip(cpuGpuChip, next.cpuGpu)
     styleChip(batChip, next.bat)
     styleChip(fpsChip, next.fps)
+    styleChip(ramChip, next.ram)
     cardDescription = buildCardDescription(lastReading)
     contentDescription = descriptionText()
   }
@@ -576,12 +579,12 @@ class OverlayView(
     }
 
   /**
-   * The CPU/GPU, BAT and FPS chips, above the action row (ANDROID.md §3, §9
-   * T15i).
+   * The CPU/GPU, BAT, FPS and RAM chips, above the action row (ANDROID.md §3,
+   * §9 T15i).
    *
-   * Three chips at 10 sp with 8 dp padding need ~140 dp of the card's 200 dp
+   * Four chips at 10 sp with 8 dp padding need ~180 dp of the card's 200 dp
    * content width even with the wider `CPU/GPU` label, so one row is enough and
-   * nothing has to shrink.
+   * nothing has to shrink. The gap stays at 6 dp; widening it would overflow.
    */
   private fun makeChipRow(): LinearLayout =
     LinearLayout(context).apply {
@@ -596,6 +599,12 @@ class OverlayView(
       )
       addView(
         fpsChip,
+        LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+          marginStart = dp(BUTTON_GAP_DP)
+        },
+      )
+      addView(
+        ramChip,
         LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
           marginStart = dp(BUTTON_GAP_DP)
         },
@@ -841,6 +850,7 @@ class OverlayView(
     if (chipState.cpuGpu) add("CPU/GPU")
     if (chipState.bat) add("BAT")
     if (chipState.fps) add("FPS")
+    if (chipState.ram) add("RAM")
   }.joinToString(", ").ifEmpty { "CPU/GPU" }
 
   private fun levelColor(level: Level): Int = when (level) {
@@ -920,6 +930,8 @@ class OverlayView(
     SegmentKind.WARN -> Palette.amber
     SegmentKind.HOT -> Palette.red
     SegmentKind.UNKNOWN -> Palette.gray
+    // RAM has no thermal band; blue matches the card's RAM bar.
+    SegmentKind.INFO -> Palette.blue
   }
 
   private fun shortBoardName(name: String): String =

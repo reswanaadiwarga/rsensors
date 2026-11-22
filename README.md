@@ -8,13 +8,16 @@ the foreground app's frame rate. CPU/GPU and FPS access use
 
 ## Features
 
-- **Collapsed pill**: `CPU/GPU`, `BAT` and `FPS`, with a source dot. Values
-  follow the green / amber / red bands and dim when the sample is stale.
-  CPU/GPU shows the hotter SoC value and uses the worse of the two levels.
+- **Collapsed pill**: `CPU/GPU`, `BAT`, `FPS` and `RAM`, with a source dot.
+  Values follow the green / amber / red bands and dim when the sample is stale.
+  CPU/GPU shows the hotter SoC value and uses the worse of the two levels; RAM
+  is used decimal GB in blue and stays visible when the sensor reading is
+  missing.
 - **Expanded card**: individual CPU, GPU and battery readings, each with the
   maximum and minimum over the last 2 minutes; thermal status; FPS; system RAM
-  used/total with a compact usage bar; and a 2-minute sparkline with a
-  `CPU+GPU / CPU / GPU / BAT / FPS` selector.
+  used/total with a compact usage bar; a 2-minute sparkline with a
+  `CPU+GPU / CPU / GPU / BAT / FPS` selector; and CPU/GPU / BAT / FPS / RAM
+  chips that choose what the pill and notification show.
 - **Real temperatures**: CPU/GPU from the platform thermal service through
   Shizuku; battery temperature and thermal status from Android. Missing sensors
   render `—`, never another sensor's value.

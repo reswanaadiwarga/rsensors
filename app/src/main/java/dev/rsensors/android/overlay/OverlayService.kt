@@ -78,8 +78,8 @@ import rikka.shizuku.Shizuku
  * onto the reading, so the recorder's v2 rows and the session graph see it.
  * Demo mode has no shell route, and an FPS failure is simply a null field.
  *
- * T15 adds the pill controls: the card's CPU/GPU / BAT / FPS chips persist in
- * [OverlayPreferences] and drive the strip, so the pill and the notification
+ * T15 adds the pill controls: the card's CPU/GPU / BAT / FPS / RAM chips persist
+ * in [OverlayPreferences] and drive the strip, so the pill and the notification
  * always agree with the chips, and a toggle polls immediately instead of
  * waiting for the next tick. The card's Stop overlay button shares the
  * notification's exit path; [onDestroy] flushes the recorder and clears the
@@ -243,7 +243,9 @@ class OverlayService : Service() {
       // The chips are the single switch for pill + notification: read them per
       // poll so a preference written by anything else is honoured next tick.
       val visibility = OverlayPreferences.visibility(this@OverlayService)
-      val strip = stripSegments(reading, now, visibility)
+      // RAM rides along with the same sample the card draws, so the chip's
+      // segment and the card's RAM row never disagree within a tick.
+      val strip = stripSegments(reading, now, visibility, ram = ram)
       mainHandler.post {
         val current = view ?: return@post
         current.setVisibility(visibility)

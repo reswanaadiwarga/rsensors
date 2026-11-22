@@ -48,6 +48,16 @@ fun fmtRam(usedBytes: Long?, totalBytes: Long?): String {
 }
 
 /**
+ * Used system RAM for the collapsed pill: decimal gigabytes, one decimal and a
+ * `G` suffix, e.g. `8.6G`.
+ *
+ * The pill is width-constrained, so unlike [fmtRam] this omits the total and
+ * the space before the unit. A null figure is [DASH].
+ */
+fun fmtRamPill(usedBytes: Long?): String =
+  if (usedBytes == null) DASH else String.format(Locale.ROOT, "%.1fG", usedBytes / BYTES_PER_GB)
+
+/**
  * Human-readable age for a tooltip.
  *
  * Bands: under 3 s "just now", under a minute "Xs ago", under an hour

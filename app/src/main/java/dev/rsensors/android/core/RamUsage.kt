@@ -1,7 +1,8 @@
 package dev.rsensors.android.core
 
 /**
- * One poll's system RAM totals, for the expanded card's RAM row and bar.
+ * One poll's system RAM totals, for the expanded card's RAM row and bar and the
+ * collapsed pill's RAM segment.
  *
  * Both values are bytes as reported by
  * [android.app.ActivityManager.MemoryInfo]: [totalBytes] is the device's

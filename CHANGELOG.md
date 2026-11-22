@@ -7,6 +7,12 @@
   poll, needs no Shizuku or extra permission, and keeps updating when the
   temperature reading is unavailable; a missing figure renders `—` with an empty
   bar.
+- Added RAM as a fourth pill metric and card chip: `RAM 8.6G` after FPS in
+  used-only decimal GB, coloured blue like the RAM bar. The `show_ram`
+  preference persists like the other chips, and the last-chip rule now covers
+  all four. RAM is independent of the sensor reading, so a missing temperature
+  sample still shows the RAM value without dimming the strip; an unavailable
+  figure renders `RAM —`.
 
 ## 0.2.0 — 2026-11-22
 
