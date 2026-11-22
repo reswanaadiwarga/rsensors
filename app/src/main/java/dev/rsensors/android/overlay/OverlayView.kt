@@ -11,6 +11,7 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.Space
 import android.widget.TextView
 import dev.rsensors.android.core.BATTERY_HOT
 import dev.rsensors.android.core.BATTERY_WARN
@@ -22,6 +23,7 @@ import dev.rsensors.android.core.GPU_WARN
 import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.Level
 import dev.rsensors.android.core.PillVisibility
+import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.RamUsage
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.Segment
@@ -64,6 +66,10 @@ import kotlin.math.abs
  *   snaps it to the nearer side edge on release. A gesture that turned into a
  *   drag or a long-press never toggles; the buttons and chips consume their own
  *   taps before the panel sees them.
+ * - The RAM row opens the process page (T17): a second page with the same
+ *   window, 280 dp wide, its own Back/Refresh and Apps/Processes filter. The
+ *   normal card hides behind it and stays expanded; Back or a tap on the pill
+ *   header returns to the 220 dp card.
  *
  * The window itself stays `FLAG_NOT_FOCUSABLE` (it must never take input focus
  * from the app underneath); the buttons and chips are still clickable, focusable
@@ -103,6 +109,15 @@ class OverlayView(
     /** The card's Start Shizuku button was pressed (server down, T15g). */
     fun onStartShizuku()
 
+    /** The RAM row opened the process page; the service starts one scan (T17). */
+    fun onProcessPageOpened()
+
+    /** The process page returned to the card; the service drops its scan (T17). */
+    fun onProcessPageClosed()
+
+    /** The process page's Refresh button was pressed (T17). */
+    fun onProcessRefresh()
+
     /** The window settled at a new position (after snap); persist it. */
     fun onPositionChanged(x: Int, y: Int, expanded: Boolean)
   }
@@ -119,6 +134,29 @@ class OverlayView(
     visibility = GONE
   }
 
+  /** The card's normal content; hidden while [processPage] is shown (T17). */
+  private val homePage = LinearLayout(context).apply {
+    orientation = VERTICAL
+  }
+
+  /** The RAM row's second page; built once and toggled with [homePage] (T17). */
+  private val processPage = ProcessPageView(
+    context,
+    object : ProcessPageView.Callbacks {
+      override fun onBack() {
+        closeProcessPage()
+      }
+
+      override fun onRefresh() {
+        callbacks.onProcessRefresh()
+      }
+
+      override fun onStartShizuku() {
+        callbacks.onStartShizuku()
+      }
+    },
+  )
+
   private val cpuValue = makeValue()
   private val cpuDetail = makeDetail()
   private val gpuValue = makeValue()
@@ -129,6 +167,22 @@ class OverlayView(
   private val fpsValue = makeValue()
   private val ramValue = makeValue()
   private val ramBar = RamBar(context)
+
+  /**
+   * The RAM row plus a trailing chevron; the whole row opens the process page
+   * (T17). The chevron is decorative, so the row carries the accessible name.
+   */
+  private val ramRow = makeRow("RAM", ramValue, null)
+  private val ramChevron = TextView(context).apply {
+    text = "\u203a"
+    setTextColor(Palette.gray)
+    setTextSize(TypedValue.COMPLEX_UNIT_SP, LABEL_SIZE_SP)
+    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    isFocusable = false
+    isClickable = false
+    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    setPadding(dp(LABEL_GAP_DP), 0, 0, 0)
+  }
   private val coresLine = makeDetail()
   private val boardLine = makeDetail()
   private val sparkline = SparklineView(context)
@@ -172,6 +226,9 @@ class OverlayView(
   private var shizukuRunning = true
 
   private var expanded = false
+
+  /** True while the process page replaces the card's normal content (T17). */
+  private var pageOpen = false
 
   private var downRawX = 0f
   private var downRawY = 0f
@@ -224,7 +281,11 @@ class OverlayView(
     }
     isClickable = true
     isFocusable = false
-    setOnClickListener { callbacks.onToggleExpanded() }
+    setOnClickListener {
+      // A tap on the pill header leaves the page instead of collapsing the
+      // card; the card stays expanded behind it (T17).
+      if (pageOpen) closeProcessPage() else callbacks.onToggleExpanded()
+    }
 
     addView(pillRow)
     addView(card)
@@ -257,9 +318,20 @@ class OverlayView(
   /** Rebuilds the pill row from the cached strip, dot and recording state. */
   private fun renderPill() {
     val strip = lastStrip ?: return
+    // The collapsed pill can use the screen width, but the expanded card/page
+    // constrains the header to their content width. Four metrics at 14 sp
+    // overflow that and clip the last value and source dot, so the expanded
+    // header steps down to fit; the process page is wider and keeps 12 sp.
+    val textSize = when {
+      pageOpen -> PAGE_HEADER_TEXT_SIZE_SP
+      expanded -> CARD_HEADER_TEXT_SIZE_SP
+      else -> PILL_TEXT_SIZE_SP
+    }
     pillRow.removeAllViews()
     strip.segments.forEachIndexed { index, segment ->
-      pillRow.addView(makeSegmentView(segment, trailingSpace = index < strip.segments.lastIndex))
+      pillRow.addView(
+        makeSegmentView(segment, trailingSpace = index < strip.segments.lastIndex, textSize),
+      )
     }
     pillRow.addView(makeDotView(lastDotColor))
     if (recording) pillRow.addView(makeRecView())
@@ -323,6 +395,11 @@ class OverlayView(
     ramValue.text = fmtRam(ram?.usedBytes, ram?.totalBytes)
     ramValue.setTextColor(Palette.white)
     ramBar.fraction = ram?.fraction ?: 0f
+    ramRow.contentDescription =
+      "RAM ${fmtRam(ram?.usedBytes, ram?.totalBytes)}. Open process memory."
+    // The page's summary and age follow the same poll, while its process list
+    // stays the snapshot taken on open or Refresh (T17).
+    if (pageOpen) processPage.setRam(ram, now)
 
     val cores = reading?.cores.orEmpty()
     coresLine.text = if (cores.isEmpty()) {
@@ -406,13 +483,99 @@ class OverlayView(
    * Shows or hides the card.
    *
    * The height changes, so the window is re-clamped once laid out to keep the
-   * card from hanging off the bottom of the display.
+   * card from hanging off the bottom of the display. Collapsing while the
+   * process page is open closes the page first (T17).
    */
   fun setExpanded(expanded: Boolean) {
+    if (!expanded) closeProcessPage()
     this.expanded = expanded
     card.visibility = if (expanded) VISIBLE else GONE
     contentDescription = descriptionText()
     post { ensureVisible() }
+  }
+
+  /** True while the process page replaces the card's normal content (T17). */
+  val isProcessPageOpen: Boolean
+    get() = pageOpen
+
+  /**
+   * Delegates the scanning state to the open page.
+   *
+   * The service calls this only for a scan it started while the page was open;
+   * the guard keeps a late result from touching the hidden page.
+   */
+  fun setProcessPageLoading() {
+    if (!pageOpen) return
+    processPage.setLoading()
+    contentDescription = descriptionText()
+  }
+
+  /**
+   * Delegates a fresh snapshot to the open page.
+   *
+   * @param processes parsed PSS rows in dump order
+   * @param capturedAt epoch millis the dump finished, the footer's age origin
+   */
+  fun setProcessPageData(processes: List<ProcessMemory>, capturedAt: Long) {
+    if (!pageOpen) return
+    processPage.setData(processes, capturedAt)
+    contentDescription = descriptionText()
+  }
+
+  /** Delegates a scan failure to the open page. */
+  fun setProcessPageError(message: String) {
+    if (!pageOpen) return
+    processPage.setError(message)
+    contentDescription = descriptionText()
+  }
+
+  /**
+   * Delegates the no-data state to the open page.
+   *
+   * @param showStart true only when the service can offer the Shizuku manager
+   */
+  fun setProcessPageUnavailable(message: String, showStart: Boolean) {
+    if (!pageOpen) return
+    processPage.setUnavailable(message, showStart)
+    contentDescription = descriptionText()
+  }
+
+  /**
+   * Leaves the process page, restores the 220 dp card and keeps it expanded.
+   *
+   * The service's defensive exit path uses this too; a normal Back tap reaches
+   * it through the page's own callback. Safe to call when the page is closed.
+   */
+  fun closeProcessPage() {
+    if (!pageOpen) return
+    pageOpen = false
+    processPage.visibility = GONE
+    homePage.visibility = VISIBLE
+    setCardWidth(CARD_WIDTH_DP)
+    contentDescription = descriptionText()
+    post { ensureVisible() }
+    callbacks.onProcessPageClosed()
+  }
+
+  /** Replaces the card's normal content with the page and widens it (T17). */
+  private fun openProcessPage() {
+    if (pageOpen) return
+    pageOpen = true
+    homePage.visibility = GONE
+    processPage.visibility = VISIBLE
+    setCardWidth(PROCESS_CARD_WIDTH_DP)
+    contentDescription = descriptionText()
+    post { ensureVisible() }
+    callbacks.onProcessPageOpened()
+  }
+
+  /** Applies a card width and re-lays the window out without animating. */
+  private fun setCardWidth(widthDp: Float) {
+    val layoutParams = card.layoutParams as? LayoutParams ?: return
+    if (layoutParams.width == dp(widthDp)) return
+    layoutParams.width = dp(widthDp)
+    card.layoutParams = layoutParams
+    card.requestLayout()
   }
 
   /**
@@ -527,19 +690,35 @@ class OverlayView(
     windowManager.updateViewLayout(this, params)
   }
 
+  /**
+   * Builds the expanded card: the normal content in [homePage], with the
+   * process page stacked behind it and hidden (T17).
+   *
+   * The RAM row is the entry point, so it gets a trailing chevron and a click
+   * listener rather than staying informational. Everything else keeps its T9 /
+   * T15 layout unchanged.
+   */
   private fun buildCard() {
     card.layoutParams = LayoutParams(dp(CARD_WIDTH_DP), LayoutParams.WRAP_CONTENT).apply {
       topMargin = dp(CARD_TOP_MARGIN_DP)
     }
-    card.addView(makeRow("CPU", cpuValue, cpuDetail))
-    card.addView(makeRow("GPU", gpuValue, gpuDetail))
-    card.addView(makeRow("BAT", batteryValue, batteryDetail))
-    card.addView(makeRow("THRM", thermalValue, null))
-    card.addView(makeRow("FPS", fpsValue, null))
-    card.addView(makeRow("RAM", ramValue, null))
+    homePage.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+    homePage.addView(makeRow("CPU", cpuValue, cpuDetail))
+    homePage.addView(makeRow("GPU", gpuValue, gpuDetail))
+    homePage.addView(makeRow("BAT", batteryValue, batteryDetail))
+    homePage.addView(makeRow("THRM", thermalValue, null))
+    homePage.addView(makeRow("FPS", fpsValue, null))
+    // The whole RAM row opens the process page. A weight-1 gap pushes the
+    // chevron to the far edge without widening the value column.
+    ramRow.addView(Space(context), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+    ramRow.addView(ramChevron)
+    ramRow.isClickable = true
+    ramRow.isFocusable = true
+    ramRow.setOnClickListener { openProcessPage() }
+    homePage.addView(ramRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
     // Full content width, directly under the RAM digits. The bar is its own
     // view, so the row height stays governed by the monospace text.
-    card.addView(
+    homePage.addView(
       ramBar,
       LayoutParams(LayoutParams.MATCH_PARENT, dp(RAM_BAR_HEIGHT_DP)).apply {
         topMargin = dp(RAM_BAR_GAP_DP)
@@ -547,17 +726,23 @@ class OverlayView(
     )
     coresLine.setPadding(0, 0, 0, 0)
     boardLine.setPadding(0, 0, 0, 0)
-    card.addView(coresLine)
-    card.addView(boardLine)
-    card.addView(makeGraphHeader())
-    card.addView(sparkline)
+    homePage.addView(coresLine)
+    homePage.addView(boardLine)
+    homePage.addView(makeGraphHeader())
+    homePage.addView(sparkline)
     // The sparkline fixes its own 36dp height; only the gap is ours to set. The
     // header sits directly above it, so this gap stays tighter than a row gap.
     (sparkline.layoutParams as LayoutParams).topMargin = dp(GRAPH_GAP_DP)
-    card.addView(makeChipRow())
-    card.addView(makeActionRow())
-    card.addView(startShizukuRow)
-    card.addView(makeStopRow())
+    homePage.addView(makeChipRow())
+    homePage.addView(makeActionRow())
+    homePage.addView(startShizukuRow)
+    homePage.addView(makeStopRow())
+
+    card.addView(homePage)
+    card.addView(processPage, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    processPage.visibility = GONE
+    ramRow.contentDescription =
+      "RAM ${fmtRam(null, null)}. Open process memory."
   }
 
   /**
@@ -862,6 +1047,11 @@ class OverlayView(
 
   /** The card's text when expanded, otherwise the pill plus recording state. */
   private fun descriptionText(): String {
+    // While the page replaces the card, the panel announces the page rather
+    // than the card it is hiding (T17).
+    if (pageOpen) {
+      return processPage.contentDescription?.toString().orEmpty().ifEmpty { "RAM by process" }
+    }
     val base = when {
       expanded -> cardDescription
       recording -> "$pillDescription, recording"
@@ -871,11 +1061,15 @@ class OverlayView(
     return if (expanded && !shizukuRunning) "$base, Shizuku stopped" else base
   }
 
-  private fun makeSegmentView(segment: Segment, trailingSpace: Boolean): TextView =
+  private fun makeSegmentView(
+    segment: Segment,
+    trailingSpace: Boolean,
+    textSizeSp: Float,
+  ): TextView =
     TextView(context).apply {
       text = if (trailingSpace) "${segment.text} " else segment.text
       setTextColor(colorFor(segment.kind))
-      setTextSize(TypedValue.COMPLEX_UNIT_SP, PILL_TEXT_SIZE_SP)
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
       typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
       gravity = Gravity.CENTER_VERTICAL
       isFocusable = false
@@ -955,6 +1149,12 @@ class OverlayView(
     private const val PAD_H_DP = 10f
     private const val PAD_V_DP = 5f
     private const val PILL_TEXT_SIZE_SP = 14f
+
+    /** Expanded-card header: four metrics must fit the 220 dp content width. */
+    private const val CARD_HEADER_TEXT_SIZE_SP = 10f
+
+    /** Process-page header: the 280 dp page has room for a more legible 12 sp. */
+    private const val PAGE_HEADER_TEXT_SIZE_SP = 12f
     private const val CARD_TEXT_SIZE_SP = 12f
     private const val LABEL_SIZE_SP = 10f
     private const val CORNER_RADIUS_DP = 8f
@@ -962,6 +1162,9 @@ class OverlayView(
 
     /** Card width: wide enough for the sparkline without spanning the screen. */
     private const val CARD_WIDTH_DP = 220f
+
+    /** The process page needs more width for eight name/value rows (T17). */
+    private const val PROCESS_CARD_WIDTH_DP = 280f
     private const val CARD_TOP_MARGIN_DP = 4f
     private const val ROW_GAP_DP = 6f
     private const val LABEL_GAP_DP = 6f

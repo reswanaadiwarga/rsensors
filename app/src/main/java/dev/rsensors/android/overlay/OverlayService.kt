@@ -21,6 +21,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.rsensors.android.core.GraphSeries
+import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.ReadingHistory
 import dev.rsensors.android.core.RamUsage
@@ -28,12 +29,14 @@ import dev.rsensors.android.core.Strip
 import dev.rsensors.android.core.VisibilityKind
 import dev.rsensors.android.core.iconSpec
 import dev.rsensors.android.core.parseFpsReply
+import dev.rsensors.android.core.parseMeminfoPss
 import dev.rsensors.android.core.stripSegments
 import dev.rsensors.android.source.BatterySource
 import dev.rsensors.android.source.DemoSource
 import dev.rsensors.android.source.DirectReader
 import dev.rsensors.android.source.DumpsysThermalSource
 import dev.rsensors.android.source.FpsRunner
+import dev.rsensors.android.source.MeminfoRunner
 import dev.rsensors.android.source.SensorSource
 import dev.rsensors.android.source.SessionStore
 import dev.rsensors.android.source.ShizukuDumpsysRunner
@@ -105,6 +108,14 @@ import rikka.shizuku.Shizuku
  * is part of the notification key, so the action appears and disappears with the
  * server.
  *
+ * T17 adds the RAM row's process page. Its `dumpsys meminfo --oom` scan runs on
+ * a second [HandlerThread] (`rsensors-meminfo`) so a ~2 s dump never delays the
+ * 2 s poll; one scan starts when the page opens and one per Refresh. Every
+ * result carries a generation and is dropped when the page closed, a newer scan
+ * started or the screen went off. The poll keeps feeding the page's summary and
+ * age through `setReading`, so the pill, notification and recording continue
+ * unchanged while the list stays a snapshot.
+ *
  * State: [isRunning] and [isRecording] are process-wide flags for the activity's
  * UI. [isRunning] turns true only after the window is attached and false in
  * [onDestroy], so the activity never claims a running overlay that failed to
@@ -164,6 +175,35 @@ class OverlayService : Service() {
    */
   private var fpsRunner: FpsRunner? = null
 
+  /**
+   * Meminfo path for the T17 process page, sharing the same Shizuku UserService
+   * binding as the thermal dump; null in demo mode. Written when the source is
+   * built on the worker and read on the meminfo thread, hence volatile.
+   */
+  @Volatile private var meminfoRunner: MeminfoRunner? = null
+
+  /**
+   * The process page's own thread: `dumpsys meminfo --oom` takes ~2 s and must
+   * never ride the 2 s thermal poll (ANDROID.md §9, §8 T17).
+   */
+  private var meminfoThread: HandlerThread? = null
+  private var meminfoHandler: Handler? = null
+
+  /** True while the process page is the card's visible content. Main thread. */
+  private var processPageOpen = false
+
+  /** Invalidates results of a scan the page no longer wants. Main thread. */
+  private var processScanGeneration = 0
+
+  /** True between posting a scan and handling its result. Main thread. */
+  private var processScanInFlight = false
+
+  /**
+   * Last successful snapshot, restored when a scan is cancelled before it
+   * returns so the page never stays on `Scanning processes…`. Main thread.
+   */
+  private var lastProcessSnapshot: Pair<List<ProcessMemory>, Long>? = null
+
   /** The current chain, kept for its per-source exception log. Worker-only. */
   private var chain: SourceChain? = null
 
@@ -185,7 +225,13 @@ class OverlayService : Service() {
   private val screenReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       when (intent.action) {
-        Intent.ACTION_SCREEN_OFF -> pausePolling()
+        Intent.ACTION_SCREEN_OFF -> {
+          // A running dump cannot be cancelled, but its result is stale once the
+          // page may no longer be watched; restore a stable state (T17).
+          cancelProcessScan()
+          pausePolling()
+        }
+
         Intent.ACTION_SCREEN_ON -> startPolling(logResume = true)
       }
     }
@@ -306,6 +352,118 @@ class OverlayService : Service() {
       null
     }
 
+  /**
+   * Starts one process-memory scan for the open page (T17).
+   *
+   * Called on the main thread from the page's open and Refresh callbacks. Each
+   * call takes a new generation; every later result is dropped unless the page
+   * is still open and the generation matches. The dump runs on [meminfoThread],
+   * never the poll worker, so the pill keeps its 2 s cadence.
+   *
+   * Missing prerequisites resolve to the page's stable unavailable/error states
+   * instead of inventing rows.
+   */
+  private fun startProcessScan() {
+    if (!processPageOpen) return
+    val generation = ++processScanGeneration
+
+    if (OverlayPreferences.isDemo(this)) {
+      processScanInFlight = false
+      view?.setProcessPageUnavailable("Not available in demo mode", showStart = false)
+      return
+    }
+    if (!isShizukuRunning()) {
+      processScanInFlight = false
+      view?.setProcessPageUnavailable("Process memory needs Shizuku", showStart = true)
+      return
+    }
+    if (!hasShizukuPermission()) {
+      processScanInFlight = false
+      view?.setProcessPageUnavailable(
+        "Grant Shizuku permission to see process memory",
+        showStart = true,
+      )
+      return
+    }
+    val runner = meminfoRunner
+    val handler = meminfoHandler
+    if (runner == null || handler == null) {
+      processScanInFlight = false
+      view?.setProcessPageError("Process scanner unavailable")
+      return
+    }
+
+    processScanInFlight = true
+    view?.setProcessPageLoading()
+    Log.i(TAG, "meminfo scan start")
+    handler.post {
+      val raw = try {
+        runner.runMeminfo()
+      } catch (e: Exception) {
+        Log.w(TAG, "meminfo scan failed", e)
+        null
+      }
+      if (raw == null) {
+        mainHandler.post { finishProcessScan(generation, null, "Couldn't read process memory") }
+        return@post
+      }
+      val processes = parseMeminfoPss(raw)
+      if (processes.isEmpty()) {
+        mainHandler.post { finishProcessScan(generation, null, "No process data") }
+        return@post
+      }
+      val capturedAt = System.currentTimeMillis()
+      mainHandler.post { finishProcessScan(generation, processes to capturedAt, null) }
+    }
+  }
+
+  /**
+   * Applies a scan result on the main thread, if it is still wanted.
+   *
+   * A closed page or a newer generation drops the result silently at debug
+   * level; the page stays hidden, so touching it would be a stale write.
+   */
+  private fun finishProcessScan(
+    generation: Int,
+    snapshot: Pair<List<ProcessMemory>, Long>?,
+    error: String?,
+  ) {
+    if (!processPageOpen || generation != processScanGeneration) {
+      Log.i(TAG, "meminfo scan result dropped")
+      return
+    }
+    processScanInFlight = false
+    if (snapshot != null) {
+      lastProcessSnapshot = snapshot
+      view?.setProcessPageData(snapshot.first, snapshot.second)
+      Log.i(TAG, "meminfo scan end rows=${snapshot.first.size}")
+    } else {
+      view?.setProcessPageError(error ?: "Couldn't read process memory")
+      Log.w(TAG, "meminfo scan failure: ${error ?: "unknown"}")
+    }
+  }
+
+  /**
+   * Invalidates a scan in flight and leaves the page in a stable state.
+   *
+   * A shell dump cannot be aborted, so its eventual result is dropped by the
+   * generation check; the page is restored to the last successful snapshot (the
+   * age shows how old it is) or to a retryable error. Screen off calls this so
+   * waking the phone never finds a permanent `Scanning processes…`.
+   */
+  private fun cancelProcessScan() {
+    processScanGeneration += 1
+    if (!processScanInFlight) return
+    processScanInFlight = false
+    Log.i(TAG, "meminfo scan cancelled")
+    val snapshot = lastProcessSnapshot
+    if (snapshot != null) {
+      view?.setProcessPageData(snapshot.first, snapshot.second)
+    } else {
+      view?.setProcessPageError("Scan cancelled")
+    }
+  }
+
   /** Callbacks the panel raises; all arrive on the main thread. */
   private val viewCallbacks = object : OverlayView.Callbacks {
     override fun onToggleExpanded() {
@@ -351,6 +509,22 @@ class OverlayService : Service() {
 
     override fun onStartShizuku() {
       startShizuku()
+    }
+
+    override fun onProcessPageOpened() {
+      processPageOpen = true
+      startProcessScan()
+    }
+
+    override fun onProcessPageClosed() {
+      processPageOpen = false
+      // Any result still on the main queue belongs to the closed page.
+      processScanGeneration += 1
+      processScanInFlight = false
+    }
+
+    override fun onProcessRefresh() {
+      if (processPageOpen) startProcessScan()
     }
 
     override fun onPositionChanged(x: Int, y: Int, expanded: Boolean) {
@@ -454,6 +628,17 @@ class OverlayService : Service() {
     handlerThread = null
     workerHandler = null
 
+    // Do not wait for a ~2 s dump: invalidate it, then let quitSafely deliver
+    // nothing to a view that is about to be removed (T17).
+    processScanGeneration += 1
+    processScanInFlight = false
+    lastProcessSnapshot = null
+    processPageOpen = false
+    meminfoThread?.quitSafely()
+    meminfoThread = null
+    meminfoHandler = null
+    meminfoRunner = null
+
     if (receiverRegistered) {
       try {
         unregisterReceiver(screenReceiver)
@@ -534,13 +719,22 @@ class OverlayService : Service() {
   /**
    * Flips the card, persists the state, re-lays the window out and polls at
    * once so the card is never a step behind the pill.
+   *
+   * A collapse request that arrives while the process page is open closes the
+   * page instead (T17); the view handles the pill-header tap on its own, so
+   * this is the defensive path.
    */
   private fun toggleExpanded() {
+    val current = view
+    if (current?.isProcessPageOpen == true) {
+      current.closeProcessPage()
+      return
+    }
     val next = !expanded
     expanded = next
     OverlayPreferences.setExpanded(this, next)
     view?.setExpanded(next)
-    view?.let { current -> params?.let { windowManager?.updateViewLayout(current, it) } }
+    view?.let { window -> params?.let { windowManager?.updateViewLayout(window, it) } }
     // Toggling is only possible while the display is on; if it is not, keep the
     // screen-off pause intact rather than waking the poller.
     if (isInteractive()) startPolling(logResume = false)
@@ -581,6 +775,12 @@ class OverlayService : Service() {
     thread.start()
     handlerThread = thread
     workerHandler = Handler(thread.looper)
+
+    // A separate thread so a ~2 s meminfo dump never delays the 2 s poll.
+    val meminfo = HandlerThread("rsensors-meminfo")
+    meminfo.start()
+    meminfoThread = meminfo
+    meminfoHandler = Handler(meminfo.looper)
   }
 
   /** Closes the old source and builds one for the current preferences. */
@@ -605,12 +805,15 @@ class OverlayService : Service() {
     chain = null
     sysfsSource = null
     fpsRunner = null
+    meminfoRunner = null
     if (OverlayPreferences.isDemo(this)) return DemoSource()
 
     // One runner for both calls: the thermal dump and the SurfaceFlinger probe
     // must share a single UserService binding (ANDROID.md §9).
     val runner = ShizukuDumpsysRunner(this)
     fpsRunner = runner
+    // The same binding answers the process page's meminfo scan (T17).
+    meminfoRunner = runner
     val sysfs =
       SysfsSource(
         reader = DirectReader(),
