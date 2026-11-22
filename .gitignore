@@ -3,6 +3,9 @@
 build/
 .kotlin/
 
+# Release artifacts are published as GitHub Release assets
+dist/
+
 # Local machine config
 local.properties
 

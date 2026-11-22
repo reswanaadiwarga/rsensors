@@ -676,7 +676,7 @@ app data was preserved.
 
 | | |
 |---|---|
-| File | `dist/rsensors-0.2.0.apk` |
+| File | GitHub Release asset `rsensors-0.2.0.apk` |
 | Size | 1,105,888 bytes |
 | SHA-256 | `4232C96E6F1696FD348B593C1DF19FDD3894CD1F4E4CB1E8C42F931318EA0023` |
 | Signature | v2, `CN=Android Debug` (SHA-256 `d0736603…621228`) |
@@ -701,8 +701,9 @@ Device verification on the POCO X7 Pro:
 - No crash; overlay left running.
 
 Repository docs staged in the app project: `README.md`, `LICENSE` (MIT),
-`CHANGELOG.md`, `docs/ARCHITECTURE.md`, `docs/BUILDING.md`, curated
-`docs/images/`, and `dist/SHA256SUMS.txt`.
+`CHANGELOG.md`, `docs/ARCHITECTURE.md`, `docs/BUILDING.md`, and curated
+`docs/images/`. The APK and checksum live in the `v0.2.0` GitHub Release;
+the repository tree is source-only.
 
 Changes since 0.1.0:
 

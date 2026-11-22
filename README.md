@@ -59,7 +59,8 @@ working version there. Other devices and versions may differ.
 
 ## Install
 
-1. Install `dist/rsensors-0.2.0.apk` with `adb install` or a file manager.
+1. Download the APK from [Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)
+   and install it with `adb install` or a file manager.
 2. Open Rsensors and grant **Display over other apps** and **Notifications**.
 3. Install and start [Shizuku](https://shizuku.rikka.app/), then grant Rsensors
    the Shizuku permission.
@@ -115,14 +116,14 @@ details.
 
 | | |
 |---|---|
-| File | `dist/rsensors-0.2.0.apk` |
+| File | `rsensors-0.2.0.apk` ([Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)) |
 | Size | 1,105,888 bytes |
 | Version | 0.2.0 (versionCode 2) |
 | SHA-256 | `4232c96e6f1696fd348b593c1df19fdd3894cd1f4e4cb1e8c42f931318ea0023` |
 | Signature | APK Signature Scheme v2, local debug key |
 | Shrinking | R8 full mode and resource shrinking |
 
-The included APK is signed with a local debug key for personal sideloading.
+The release APK is signed with a local debug key for personal sideloading.
 Replace the key before distributing the app; see
 [docs/BUILDING.md](docs/BUILDING.md#release-signing). The APK is built from the
 source covered by the 214 JVM tests; the R8 keep rule protects the Shizuku
