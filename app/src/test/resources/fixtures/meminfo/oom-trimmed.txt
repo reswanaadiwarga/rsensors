@@ -1,0 +1,33 @@
+Applications Memory Usage (in Kilobytes):
+Uptime: 4194304 Realtime: 8390656
+
+Total RSS by OOM adjustment:
+    812,000K: Native
+        812,000K: vendor.example.npu (pid 512)
+    501,400K: System
+        501,400K: system (pid 1000)
+    102,000K: Cached
+         60,000K: com.example.notes (pid 4100 / activities)
+         42,000K: com.example.notes:remote (pid 4101)
+
+Total PSS by OOM adjustment:
+    900,000K: Native
+        810,234K: vendor.example.npu (pid 512)
+    612,000K: System
+        500,123K: system (pid 1000)
+    160,000K: Persistent
+         96,000K: com.example.launcher (pid 1500 / activities)
+         45,678K: dev.rsensors.android (pid 1600)
+    130,000K: Cached
+         52,345K: com.example.notes (pid 4100 / activities)
+         12,345K: com.example.notes:remote (pid 4101)
+         21,000K: com.example.photos (pid 4200)
+          9,500K: com.example.music (pid 4300)
+          7,321K: com.example.maps (pid 4400 / activities)
+     12x34K: com.example.broken (pid 5000)
+      5,000K: com.example.truncated (pid 5001
+      1,000K:  (pid 5002)
+
+Total SwapPSS by OOM adjustment:
+    999,999K: Cached
+        1,234K: com.example.ghost (pid 7777)
