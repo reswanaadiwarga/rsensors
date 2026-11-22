@@ -1,0 +1,27 @@
+# Gradle / Kotlin
+.gradle/
+build/
+.kotlin/
+
+# Local machine config
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Development evidence and captures (not part of the app)
+input/
+captures/
+
+# Native build
+.externalNativeBuild/
+.cxx/
+
+# Signing material
+*.jks
+*.keystore
+
+# OS noise
+.DS_Store
+Thumbs.db

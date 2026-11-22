@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rsensors manifest.
+
+  Exactly four app-authored permissions (ANDROID.md §6): the overlay window, the
+  foreground service and its specialUse type, and the runtime notification
+  permission. INTERNET is never added: sensor data stays on the phone (§2.2).
+  RECEIVE_BOOT_COMPLETED is the fifth and only exists so BootReceiver can
+  restore the overlay after a reboot (T10); it is not a network or data-access
+  permission.
+  The Shizuku provider library contributes its own API_V23 permission during
+  manifest merge; that is the official integration and is not a request from
+  this app.
+
+  The service is the only overlay owner (one TYPE_APPLICATION_OVERLAY window).
+  Its specialUse subtype is required from API 34 and is read by the framework,
+  not by the app.
+
+  BootReceiver is exported because BOOT_COMPLETED is a protected system
+  broadcast; it does nothing except ask the service to start, and it re-checks
+  the user's boot flag and the overlay grant on every delivery.
+
+  ShizukuProvider hands the Shizuku binder to this process (ANDROID.md §9); its
+  authority is per-application so two installs cannot collide. The <queries>
+  entry lets package visibility find the Shizuku manager on API 30+ so the
+  activity can offer "Open Shizuku".
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Rsensors">
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Saved sessions (T12): internal screens, opened only by this app. -->
+        <activity
+            android:name=".ui.SessionsActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.SessionDetailActivity"
+            android:exported="false" />
+
+        <!-- Diagnostics (T7): the zone table and manual override picker. -->
+        <activity
+            android:name=".ui.DiagnosticsActivity"
+            android:exported="false" />
+
+        <!-- Shizuku setup/troubleshooting guide (T15g): internal screen. -->
+        <activity
+            android:name=".ui.ShizukuHelpActivity"
+            android:exported="false" />
+
+        <service
+            android:name=".overlay.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="temperature overlay" />
+        </service>
+
+        <!-- Restores the overlay after a reboot when the user left it on (T10). -->
+        <receiver
+            android:name=".boot.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>
+
+</manifest>

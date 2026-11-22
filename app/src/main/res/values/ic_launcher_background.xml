@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overlay background colour (Palette.dark) used by the adaptive launcher icon. -->
+<resources>
+    <color name="ic_launcher_background">#090D13</color>
+</resources>
