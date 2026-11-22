@@ -126,9 +126,9 @@ class StopPolicyTest {
   }
 
   @Test
-  fun `persistent wins over the core denylist`() {
+  fun `core denylist wins over the persistent flag`() {
     assertEquals(
-      StopDecision(protected, "Persistent app."),
+      StopDecision(protected, "Core system package."),
       stopDecision(
         app(packageName = "com.android.phone", isPersistent = true, isSystemApp = true),
       ),
@@ -242,6 +242,20 @@ class StopPolicyTest {
       ),
       stopDecision(
         app(packageName = "com.google.android.gms", isSystemApp = true, isUpdatedSystemApp = true),
+      ),
+    )
+  }
+
+  @Test
+  fun `GMS in a protected group is protected before the GMS warning`() {
+    assertEquals(
+      StopDecision(protected, "System or persistent process."),
+      stopDecision(
+        app(
+          packageName = "com.google.android.gms",
+          groups = setOf("Persistent"),
+          isSystemApp = true,
+        ),
       ),
     )
   }

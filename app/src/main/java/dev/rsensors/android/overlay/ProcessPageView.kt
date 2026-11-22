@@ -296,11 +296,30 @@ class ProcessPageView(
     importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
   }
 
+  /**
+   * The selected row's package, shown under the title for Apps rows. MIDDLE
+   * truncation keeps both the leading and trailing package segments readable
+   * at the card's narrow width. Processes rows hide it because their title
+   * already carries the package/pid.
+   */
+  private val selectionPackage = TextView(context).apply {
+    setTextColor(Palette.gray)
+    setTextSize(TypedValue.COMPLEX_UNIT_SP, SELECTION_META_SIZE_SP)
+    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
+    maxLines = 1
+    ellipsize = TextUtils.TruncateAt.MIDDLE
+    isFocusable = false
+    isClickable = false
+    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+  }
+
   private val selectionMeta = TextView(context).apply {
     setTextColor(Palette.gray)
     setTextSize(TypedValue.COMPLEX_UNIT_SP, SELECTION_META_SIZE_SP)
     typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
-    maxLines = 2
+    // Up to three lines so the whole-app confirmation sentence is not dropped
+    // at the card's width.
+    maxLines = 3
     ellipsize = TextUtils.TruncateAt.END
     isFocusable = false
     isClickable = false
@@ -330,6 +349,12 @@ class ProcessPageView(
     orientation = VERTICAL
     visibility = GONE
     addView(selectionTitle, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    addView(
+      selectionPackage,
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+        topMargin = dp(SELECTION_META_GAP_DP)
+      },
+    )
     addView(
       selectionMeta,
       LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
@@ -955,29 +980,29 @@ class ProcessPageView(
       setColor(if (selected) SELECTED_ROW_TINT else Color.TRANSPARENT)
     }
 
-  /** `AICore 956M, select to stop`-style row text with the selected state. */
+  /** `AICore 956M, select for details`-style row text with the selected state. */
   private fun rowDescription(row: DisplayRow, selected: Boolean): String {
     val count = if (mode == Mode.APPS && row.processCount > 1) {
       ", ${row.processCount} processes"
     } else {
       ""
     }
-    val state = if (selected) {
-      "Selected. Use the selection bar to stop it."
-    } else {
-      "Select to stop."
-    }
+    // Neutral wording: a protected row must not promise a Stop.
+    val state = if (selected) "Selected." else "Select for details."
     return "${row.label} ${fmtProcessRam(row.pssKb)}$count. $state"
   }
 
   /**
    * Fills the selection bar for the current state.
    *
-   * Initial: the name and PSS as the title and the tier as the meta. After the
-   * first Stop tap it becomes `Stop <name>?` plus the whole-app sentence; while
-   * the stop runs both buttons are hidden; after a failure it becomes
-   * `Couldn't stop <name>` plus the message and the reason, with Stop/Cancel so
-   * the user can retry or cancel. Protected rows never receive a Stop button.
+   * Initial: the name and PSS as the title, the package underneath for Apps
+   * rows, and the tier as the meta — a padlock glyph for PROTECTED, the reason
+   * for WARNING, and no meta line for NORMAL (the title and package suffice).
+   * After the first Stop tap it becomes `Stop <name>?` plus the whole-app
+   * sentence; while the stop runs both buttons are hidden; after a failure it
+   * becomes `Couldn't stop <name>` plus the message and the reason, with
+   * Stop/Cancel so the user can retry or cancel. Protected rows never receive
+   * a Stop button.
    */
   private fun bindSelectionBar() {
     val row = selected ?: return
@@ -997,13 +1022,20 @@ class ProcessPageView(
       }
     }
 
-    selectionMeta.text = when {
+    // Apps rows always show the package here; Processes rows keep it GONE
+    // because their title already contains the package/pid.
+    selectionPackage.text = packageText(row)
+    selectionPackage.visibility = if (mode == Mode.APPS) VISIBLE else GONE
+
+    val meta = when {
       error != null -> listOfNotNull(error, decision.reason).joinToString(" \u00b7 ")
-      confirming -> confirmationMeta(row, decision)
-      risk == StopRisk.PROTECTED -> "PROTECTED \u00b7 ${decision.reason}"
+      confirming -> confirmationMeta(decision)
+      risk == StopRisk.PROTECTED -> "\uD83D\uDD12 PROTECTED \u00b7 ${decision.reason}"
       risk == StopRisk.WARNING -> "WARNING \u00b7 ${decision.reason}"
-      else -> packageText(row)
+      else -> null
     }
+    selectionMeta.text = meta.orEmpty()
+    selectionMeta.visibility = if (meta != null) VISIBLE else GONE
     selectionMeta.setTextColor(
       when {
         error != null -> Palette.red
@@ -1033,18 +1065,15 @@ class ProcessPageView(
     Mode.PROCESSES -> row.packageName ?: row.label
   }
 
-  /** The package line for a NORMAL row, with the row name as the fallback. */
+  /** The package line under the title, with the row name for an unresolved package. */
   private fun packageText(row: DisplayRow): String =
     row.packageName?.takeIf { it.isNotEmpty() } ?: selectionName(row)
 
-  /** `WARNING · reason · This stops every process of the app.` or the package line. */
-  private fun confirmationMeta(row: DisplayRow, decision: StopDecision): String {
-    val base = if (decision.risk == StopRisk.WARNING) {
-      "WARNING \u00b7 ${decision.reason}"
-    } else {
-      packageText(row)
-    }
-    return "$base \u00b7 This stops every process of the app."
+  /** `WARNING · reason · This stops every process of the app.` or the sentence alone. */
+  private fun confirmationMeta(decision: StopDecision): String = when (decision.risk) {
+    StopRisk.WARNING ->
+      "WARNING \u00b7 ${decision.reason} \u00b7 This stops every process of the app."
+    else -> "This stops every process of the app."
   }
 
   /**
@@ -1077,9 +1106,10 @@ class ProcessPageView(
 
   /**
    * The page's accessibility text, in the spec's shape:
-   * `RAM by process, Apps, 42 apps, updated just now`, plus the selected row
-   * and its tier (and a stop failure) while the selection bar is visible.
-   * Non-data states name themselves so TalkBack never reads a stale count.
+   * `RAM by process, Apps, 42 apps, updated just now`, plus the selected row,
+   * its package, tier and tier reason (and a stop failure) while the selection
+   * bar is visible. Non-data states name themselves so TalkBack never reads a
+   * stale count.
    */
   private fun pageDescription(total: Int): String {
     val base = when (content) {
@@ -1096,13 +1126,15 @@ class ProcessPageView(
       StopRisk.WARNING -> "warning"
       StopRisk.NORMAL -> "normal"
     }
+    val reason = decision.reason?.let { ", $it" }.orEmpty()
     val state = when {
       stopping -> ", stopping"
       stopError != null -> ", stop failed"
       confirming -> ", confirm stop"
       else -> ""
     }
-    return "$base, selected ${selectionName(row)}, $riskWord$state"
+    return "$base, selected ${selectionName(row)}, package ${packageText(row)}, " +
+      "$riskWord$reason$state"
   }
 
   private fun dp(value: Float): Int = (value * resources.displayMetrics.density + 0.5f).toInt()

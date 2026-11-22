@@ -100,11 +100,12 @@ private fun String.normalized(): String = trim().lowercase(Locale.ROOT)
  *
  * The checks run in a fixed order because several flags overlap in practice:
  * this overlay and Shizuku outrank everything; unresolvable processes are
- * native and never stoppable; core UIDs and packages outrank their system
- * flags; and app-specific reasons (hidden details, AICore, GMS, launcher, IME)
- * outrank the generic "system app" and "currently in use" sentences so the
- * confirmation names the most useful cause. AICore in particular is a system,
- * updated-system, visible app but must stay stoppable as a WARNING.
+ * native and never stoppable; core UIDs and packages outrank their system and
+ * persistent flags; and app-specific reasons (hidden details, AICore, GMS,
+ * launcher, IME) outrank the generic "system app" and "currently in use"
+ * sentences so the confirmation names the most useful cause. AICore in
+ * particular is a system, updated-system, visible app but must stay stoppable
+ * as a WARNING.
  *
  * Pure: no Android APIs and no side effects.
  */
@@ -120,10 +121,13 @@ fun stopDecision(target: StopTarget): StopDecision {
 
   val uid = target.uid
   if (uid != null && uid < 10000) return protected("Core system process.")
-  if (target.isPersistent) return protected("Persistent app.")
 
   val packageName = target.packageName.normalized()
   if (packageName in CORE_PACKAGES) return protected("Core system package.")
+
+  // The denylist is checked first so a core package reports its real cause even
+  // when it also carries FLAG_PERSISTENT (systemui and phone both do).
+  if (target.isPersistent) return protected("Persistent app.")
 
   val groups = target.groups.map { it.normalized() }.toSet()
   if (groups.any { it in PROTECTED_GROUPS }) {
