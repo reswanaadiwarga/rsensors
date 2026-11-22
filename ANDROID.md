@@ -104,6 +104,17 @@ nice-to-haves:
   records CPU, GPU, BAT and FPS regardless of either choice. The wordy source/age line is gone — the source
   lives in Diagnostics. On the target phone the per-core list is empty (no
   sensors); show `per-core n/a` instead of an empty section.
+- **Process memory** (expanded card → RAM row): the RAM row is a button with a
+  `›`; it opens a second page in the same overlay. The page lists the top
+  processes by PSS from `dumpsys meminfo --oom`, eight per page, with an
+  `Apps` / `Processes` toggle: `Apps` groups by package and hides the
+  `Native`/`System` OOM groups, `Processes` shows every row. The header has
+  `Back` and `Refresh`; the summary keeps the card's system `used / total` and
+  the footer shows `N apps/processes`, `Updated …` and `‹ 1–8 of N ›`. The dump
+  is a snapshot taken when the page opens and on Refresh (~2 s), never part of
+  the 2 s/5 s poll; the pill keeps updating behind it. The card grows to 280 dp
+  and returns to 220 dp on Back. No new permissions. Without Shizuku, or in
+  demo mode, the page shows an unavailable state and never invents data.
 - **FPS**: the foreground app's frame rate, measured through Shizuku's
   UserService with `dumpsys SurfaceFlinger --list/--latency` for the top
   activity's layer — never the overlay's own frames. Without Shizuku the value
@@ -173,6 +184,7 @@ app/src/main/java/dev/rsensors/android/
     ReadingHistory.kt       2-minute ring buffer for the sparkline
     SessionLog.kt           versioned CSV encode/decode for saved sessions
     SessionChart.kt         series bounds/nearest index for the session graph
+    ProcessMemory.kt        meminfo PSS parser, app grouping, paging, formatting
   source/
     SensorSource.kt         interface: id, poll(now): Reading?, close()
     SysfsReader.kt          open(path): String?  + listDir(path)
@@ -180,18 +192,20 @@ app/src/main/java/dev/rsensors/android/
     SysfsSource.kt          thermal zones + cpufreq + kgsl (best-effort)
     DumpsysRunner.kt        interface: run(): String? / close()
     DumpsysThermalSource.kt runner + parser -> Reading
-    ShizukuDumpsysRunner.kt Shizuku UserService binding (dumpsys + fps)
+    ShizukuDumpsysRunner.kt Shizuku UserService binding (dumpsys + fps + meminfo)
     FpsRunner.kt            interface: runFps(): String? (shell reply)
+    MeminfoRunner.kt        interface: runMeminfo(): String? (raw --oom dump)
     BatterySource.kt        sticky ACTION_BATTERY_CHANGED
     ThermalStatusSource.kt  PowerManager thermal status
     DemoSource.kt           synthetic ramps (preview)
     SourceChain.kt          merges sources, records per-source errors
     SessionStore.kt         session files: list/read/write under filesDir
   shizuku/
-    DumpsysUserService.kt    shell-side UserService (dumpsys + SurfaceFlinger FPS)
+    DumpsysUserService.kt    shell-side UserService (dumpsys + FPS + meminfo)
   overlay/
-    OverlayService.kt       FGS, poller, screen on/off, notification
-    OverlayView.kt          pill + expanded card, classic Views
+    OverlayService.kt       FGS, poller, screen on/off, notification, meminfo scan
+    OverlayView.kt          pill + expanded card + process page, classic Views
+    ProcessPageView.kt      paged Apps/Processes memory list inside the card
     SparklineView.kt        2-minute CPU/GPU history graph
     SessionRecorder.kt      CSV writer owned by the poller
     OverlayParams.kt        WindowManager.LayoutParams helpers
@@ -210,12 +224,14 @@ app/src/test/java/dev/rsensors/android/
   core/ZoneMapTest.kt
   core/DumpsysParserTest.kt
   core/ReadingHistoryTest.kt
+  core/ProcessMemoryTest.kt
   source/DemoSourceTest.kt
   source/DumpsysThermalSourceTest.kt
   source/SysfsParserTest.kt
   source/SysfsSourceTest.kt
   source/SourceChainTest.kt
 app/src/test/resources/fixtures/sysfs/...   fake zone trees
+app/src/test/resources/fixtures/meminfo/... trimmed --oom dumps
 app/src/main/aidl/dev/rsensors/android/shizuku/IDumpsysService.aidl
 ```
 
@@ -361,6 +377,11 @@ Test layers:
   (POSIX permissions are not portable in checked-in fixtures on every host).
 - **Session logs**: `SessionLog` encode/decode round-trip and `SessionStore`
   list/read on a temp directory; the graph interaction is on-device/manual.
+- **Process memory**: a trimmed `dumpsys meminfo --oom` fixture; parser
+  handling of comma thousands and `/ activities` suffixes, Apps grouping and
+  Native/System exclusion, paging, and formatting. Manual: compare the top rows
+  with `adb shell dumpsys meminfo --oom` and confirm the scan does not stall the
+  pill's 2 s poll.
 - **Instrumented (manual)**: overlay permission flow, drag, service
   survives screen off/on, reboot autostart. Run on the target phone.
 
@@ -368,7 +389,10 @@ End-to-end verification for the whole project: install the APK, grant
 overlay + notifications, and confirm the pill shows the same number as the
 CPU/GPU lines of `adb shell dumpsys thermalservice` within one poll; then lock
 the screen for a minute and confirm polling stops in logcat and resumes
-instantly.
+instantly. For T17, open the RAM row, compare the first rows with
+`adb shell dumpsys meminfo --oom`, toggle Apps/Processes and page through,
+confirm Back restores the 220 dp card, and kill Shizuku to confirm the
+unavailable state; the pill must keep updating throughout.
 
 ## 8. Tasks
 
@@ -380,7 +404,7 @@ T9 (the expanded card) lands before T7 as well: it is the user-facing feature,
 and T7 can read the card's snapshot. T12/T13 (recording and the session graph)
 follow T9 and precede T7: they are the requested session feature. T14/T15 are
 post-release: FPS data first, then the overlay controls; T16 rebuilds the
-release.
+release. T17 adds the process-memory page after the RAM row and pill.
 
 | # | Task | Acceptance |
 |---|---|---|
@@ -410,9 +434,27 @@ release.
 | T15i ✅ | Combined pill + card min/max | Pill becomes `CPU/GPU 41° BAT 34° FPS 60`; CPU/GPU is the hotter sensor, coloured by the worse level; chips become CPU/GPU / BAT / FPS; card keeps individual CPU/GPU/BAT rows with 2-minute max/min; `hot` and the HAL max display are removed; 208 tests; device-verified (70° amber via the GPU warn level; Shizuku down shows `CPU/GPU — BAT 35° FPS —`) |
 | T15j ✅ | No-device quality pass | Version warning extracted to `core/ShizukuCompat.kt` with 6 tests; corrupt T15h PNGs removed; 0.2.0 notes/checklist drafted; no behaviour change; 214 tests; no device |
 | T16 ✅ | Release 0.2.0 | Installed and device-verified: versionCode 2 / 0.2.0, R8 + shrinking, 1,105,888 B, SHA-256 `4232C96E…EA0023`, v2 debug-signed. The Shizuku UserService/FPS path survives R8, the pill/card/guide/session graph/notification work, recording is v2, and the degraded `CPU/GPU — BAT 36° FPS —` prompt plus `Shizuku help` action recover after a server restart. 214 tests. |
+| T17 | Process memory page | RAM row opens a second page in the expanded card; `dumpsys meminfo --oom` PSS parsed shell-side; `Apps` groups by package and hides `Native`/`System`, `Processes` shows every row; 8 per page with prev/next; `Back`/`Refresh`; on-open + manual scans only; card 280 dp and restores 220 dp on back; no new permissions; unavailable state without Shizuku and in demo mode; parser fixtures; the pill keeps polling during a scan; device-verified |
 
-T0 is the only task that needs the phone before coding starts, and it is the
-next action.
+T17 is the current task; T0-T16 are complete.
+
+### T17 process-memory probe (2026-11-23)
+
+Measured on the target as the shell UID (the UID a Shizuku UserService gets):
+
+| Command | Result | Time |
+|---|---|---|
+| `dumpsys meminfo --oom` | Per-process **PSS** and RSS, grouped by OOM adjustment | ~2.1 s |
+| `dumpsys meminfo <pid>` | App Summary for one process (Java/native/code/graphics/system, total PSS/RSS) | ~0.2 s |
+| `dumpsys activity processes` | Process list with `lastPss`, but cached and sometimes `0.00` or 18 min old | ~0.2 s |
+| `cat /proc/<pid>/smaps_rollup` | `Permission denied`, even to shell | — |
+
+The PSS section is the source for T17. `dumpsys meminfo --oom` cannot ride the
+2 s poll; the page takes one snapshot on open and on Refresh. The `Apps` view
+excludes the `Native` and `System` OOM groups (on the target the top native
+process is the ~810 MB neural-networks shim); `Processes` shows every parsed
+row. The card's `used / total` remains `MemoryInfo`; the list is PSS, so the two
+figures are related but not identical.
 
 ### T14 FPS probe and algorithm (2026-11-22)
 
@@ -571,6 +613,23 @@ Defaults are chosen; change them now, not during implementation.
   bar, without touching the poll, strip, recording, diagnostics or notification.
   The bar is decorative for accessibility; the card description carries
   `RAM 4.5 / 7.8 GB` or `RAM not available`.
+- Process memory page (T17): the RAM row is the entry point. The list is a
+  snapshot of the `Total PSS by OOM adjustment` section of
+  `dumpsys meminfo --oom`, parsed by `core/ProcessMemory.kt`. One scan runs when
+  the page opens and one per `Refresh` (~2.1 s), on a second HandlerThread so
+  the 2 s thermal/FPS poll is never blocked. The page shows eight rows; `Apps`
+  groups by base package and hides the `Native`/`System` OOM groups,
+  `Processes` shows every parsed row. The toggle and pager are view-local and
+  reset/clamp on a new snapshot. `Back` returns to the 220 dp card and keeps it
+  expanded; the page itself uses 280 dp. No row detail, icons, auto-refresh or
+  full-screen list in v1. The page never invents data: no Shizuku, demo mode or
+  a parse failure shows an unavailable/error state. The card's `used / total`
+  is `MemoryInfo`; the rows are PSS, so the footer labels the list `PSS`.
+- The AIDL adds `runMeminfo() = 3` and bumps the UserService registration to
+  `version(4)` so a stale v3 shell process cannot answer the new transaction.
+  The UserService runs `/system/bin/dumpsys meminfo --oom` and returns stdout;
+  the parser is pure and fixture-tested. The runner forgets the binding on any
+  failure, like `runDumpsys`/`runFps`.
 - The help screen's topics are collapsible cards; the version warning appears
   only when the manager version starts with `13.6.0` and the API is 36+
   (Android 16). Below 560 dp the status card scrolls with the list instead of
