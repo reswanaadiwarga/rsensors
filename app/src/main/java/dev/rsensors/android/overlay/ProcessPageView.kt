@@ -1,18 +1,27 @@
 package dev.rsensors.android.overlay
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.provider.Settings
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.rsensors.android.core.PROCESS_PAGE_SIZE
 import dev.rsensors.android.core.PageSlice
 import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.RamUsage
+import dev.rsensors.android.core.StopDecision
+import dev.rsensors.android.core.StopRisk
+import dev.rsensors.android.core.StopTarget
 import dev.rsensors.android.core.fmtAge
 import dev.rsensors.android.core.fmtProcessCount
 import dev.rsensors.android.core.fmtProcessRam
@@ -20,25 +29,37 @@ import dev.rsensors.android.core.fmtRam
 import dev.rsensors.android.core.groupApps
 import dev.rsensors.android.core.pageSlice
 import dev.rsensors.android.core.sortProcesses
+import dev.rsensors.android.core.stopDecision
 import dev.rsensors.android.ui.Palette
 
 /**
  * The process-memory page of the expanded overlay card (ANDROID.md §3, §9, §8
- * T17).
+ * T17, T18).
  *
  * Replaces the card's normal content while open: a `Back` / `RAM BY PROCESS` /
  * `Refresh` header, the card's `Used …` summary with an `Apps` / `Processes`
  * filter, eight PSS rows, and a footer with the snapshot age and a pager. The
  * list itself is a snapshot supplied by the service; this view owns only the
- * presentation state (filter, page, labels) and never scans by itself.
+ * presentation state (filter, page, labels, selection) and never scans or stops
+ * by itself.
+ *
+ * T18 turns each row into a selection target. A tap selects the row (blue tint
+ * and left accent) and replaces the footer with a selection bar that names the
+ * item, its PSS, its package and the `StopPolicy` tier. Stop always asks once
+ * more before calling [Callbacks.onStopRequested]; protected rows never show
+ * Stop. The page keeps its selection while a stop is reported or fails and
+ * clears it on Cancel, Back, a filter or page change, Refresh and any new
+ * loading/data/error/unavailable state.
  *
  * The page is clickable with a no-op listener so taps on its background are
- * consumed instead of reaching the panel's collapse gesture. The header buttons,
- * filter chips and pager consume their own taps.
+ * consumed instead of reaching the panel's collapse gesture and never clear the
+ * selection. The header buttons, filter chips, rows, selection buttons and
+ * pager consume their own taps.
  *
  * Threading: constructed and mutated on the main thread only, like
- * [OverlayView]. App labels are resolved through [PackageManager] once per
- * package and cached on this view.
+ * [OverlayView]. App labels, [ApplicationInfo] and the launcher/IME package sets
+ * are resolved through [PackageManager] and cached on this view; package
+ * visibility is deliberately not broadened.
  */
 class ProcessPageView(
   context: Context,
@@ -46,7 +67,7 @@ class ProcessPageView(
 ) : LinearLayout(context) {
   /** Page actions the panel forwards; all arrive on the main thread. */
   interface Callbacks {
-    /** The header's Back button was pressed. */
+    /** The header's Back button was pressed while no row was selected. */
     fun onBack()
 
     /** The header's Refresh button was pressed. */
@@ -54,6 +75,13 @@ class ProcessPageView(
 
     /** The unavailable state's Start Shizuku button was pressed. */
     fun onStartShizuku()
+
+    /**
+     * The user confirmed Stop for [target]. The service re-checks the policy,
+     * runs the shell stop off the main thread and reports the outcome back
+     * through [setStopError] or [setLoading].
+     */
+    fun onStopRequested(target: StopTarget)
   }
 
   /** The two filter modes; [apps] also selects the footer's noun. */
@@ -65,11 +93,39 @@ class ProcessPageView(
   /** What the state area is currently reporting, if anything. */
   private enum class Content { LOADING, DATA, ERROR, UNAVAILABLE }
 
-  /** One display row: an app label or a full process name plus its PSS. */
-  private class DisplayRow(val name: String, val pssKb: Long)
+  /**
+   * One display row for the current filter.
+   *
+   * [label] is the resolved app label (Apps) or the full process name
+   * (Processes). [groups] are the raw OOM groups the policy must consider: all
+   * groups of the package for an Apps row, the row's own group for a Process
+   * row. A Process row carries [packageName] only when its base name resolves
+   * to an installed package; otherwise the policy sees a native/unknown target.
+   * [pid] is null for Apps rows, and [processCount] is the grouped app's process
+   * count or the number of rows sharing a Process row's base name.
+   */
+  private data class DisplayRow(
+    val label: String,
+    val pssKb: Long,
+    val packageName: String?,
+    val groups: Set<String>,
+    val pid: Int?,
+    val processCount: Int,
+  )
 
-  /** Fixed row views recycled for each page; the page size is always eight. */
-  private class RowHolder(val container: LinearLayout, val name: TextView, val value: TextView)
+  /**
+   * Fixed row views recycled for each page; the page size is always eight.
+   *
+   * [accent] is the 2 dp blue left bar that is INVISIBLE until the row is
+   * selected; keeping it laid out (rather than GONE) keeps the label column
+   * aligned across rows.
+   */
+  private class RowHolder(
+    val container: LinearLayout,
+    val accent: View,
+    val name: TextView,
+    val value: TextView,
+  )
 
   private var mode = Mode.APPS
   private var content = Content.LOADING
@@ -80,6 +136,9 @@ class ProcessPageView(
    */
   private var processes: List<ProcessMemory> = emptyList()
   private var capturedAt = 0L
+
+  /** Message shown for the loading state; set by the service per scan. */
+  private var loadingMessage = DEFAULT_LOADING_MESSAGE
 
   /** Message shown for the error and unavailable states. */
   private var stateMessage = ""
@@ -92,11 +151,38 @@ class ProcessPageView(
 
   private var pageIndex = 0
 
+  /** The selected row and its policy verdict, or null when nothing is selected. */
+  private var selected: DisplayRow? = null
+  private var selectedTarget: StopTarget? = null
+  private var selectedDecision: StopDecision? = null
+
+  /** True after the first Stop tap: the next Stop tap actually requests a stop. */
+  private var confirming = false
+
+  /** True between the confirmed Stop tap and the service's result. */
+  private var stopping = false
+
+  /** The service's failure message, shown in place of the reason while retrying. */
+  private var stopError: String? = null
+
   /** Resolved app labels keyed by package; the fallback package name is cached too. */
   private val labelCache = HashMap<String, String>()
 
-  private val backButton = pageButton("\u2039 Back", "Back to card") { callbacks.onBack() }
-  private val refreshButton = pageButton("Refresh", "Refresh process memory") { callbacks.onRefresh() }
+  /** Resolved [ApplicationInfo] keyed by package; a miss is cached as null too. */
+  private val infoCache = HashMap<String, ApplicationInfo?>()
+
+  /** Launcher packages, resolved on first use from the HOME intent. */
+  private var launcherPackages: Set<String>? = null
+
+  /** Current default IME package, read once from secure settings. */
+  private var imePackage: String? = null
+  private var imeLoaded = false
+
+  private val backButton = pageButton("\u2039 Back", "Back to card") { onBackTapped() }
+  private val refreshButton = pageButton("Refresh", "Refresh process memory") {
+    clearSelection()
+    callbacks.onRefresh()
+  }
 
   private val titleView = TextView(context).apply {
     text = "RAM BY PROCESS"
@@ -199,11 +285,71 @@ class ProcessPageView(
     addView(nextButton)
   }
 
+  private val selectionTitle = TextView(context).apply {
+    setTextColor(Palette.white)
+    setTextSize(TypedValue.COMPLEX_UNIT_SP, SELECTION_TITLE_SIZE_SP)
+    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    maxLines = 1
+    ellipsize = TextUtils.TruncateAt.END
+    isFocusable = false
+    isClickable = false
+    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+  }
+
+  private val selectionMeta = TextView(context).apply {
+    setTextColor(Palette.gray)
+    setTextSize(TypedValue.COMPLEX_UNIT_SP, SELECTION_META_SIZE_SP)
+    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
+    maxLines = 2
+    ellipsize = TextUtils.TruncateAt.END
+    isFocusable = false
+    isClickable = false
+    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+  }
+
+  private val stopButton = selectionButton("Stop", Palette.red) { onStopTapped() }
+  private val cancelButton = selectionButton("Cancel", Palette.gray) { onCancelTapped() }
+
+  private val selectionButtons = LinearLayout(context).apply {
+    orientation = HORIZONTAL
+    gravity = Gravity.END
+    addView(stopButton)
+    addView(
+      cancelButton,
+      LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+        marginStart = dp(SELECTION_BUTTON_GAP_DP)
+      },
+    )
+  }
+
+  /**
+   * Replaces the footer while a row is selected; its height is part of the
+   * page, so the window grows instead of the bar overlapping the list.
+   */
+  private val selectionBar = LinearLayout(context).apply {
+    orientation = VERTICAL
+    visibility = GONE
+    addView(selectionTitle, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+    addView(
+      selectionMeta,
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+        topMargin = dp(SELECTION_META_GAP_DP)
+      },
+    )
+    addView(
+      selectionButtons,
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+        topMargin = dp(SELECTION_BUTTON_TOP_GAP_DP)
+      },
+    )
+  }
+
   init {
     orientation = VERTICAL
     isClickable = true
     isFocusable = false
-    // Consume background taps so they never reach the panel's collapse gesture.
+    // Consume background taps so they never reach the panel's collapse gesture
+    // and never clear the selection.
     setOnClickListener { /* deliberate no-op */ }
 
     addView(buildHeader(), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -231,11 +377,25 @@ class ProcessPageView(
         topMargin = dp(ROW_GAP_DP)
       },
     )
+    addView(
+      selectionBar,
+      LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+        topMargin = dp(ROW_GAP_DP)
+      },
+    )
     render()
   }
 
-  /** Shows the scanning state and disables Refresh until a result arrives. */
-  fun setLoading() {
+  /**
+   * Shows the scanning state and disables Refresh until a result arrives.
+   *
+   * Clears any selection: a new scan is a new snapshot, and a stop's success
+   * path uses [message] to report `Stop requested — refreshing…` in the state
+   * area.
+   */
+  fun setLoading(message: String = DEFAULT_LOADING_MESSAGE) {
+    clearSelection()
+    loadingMessage = message
     content = Content.LOADING
     render()
   }
@@ -244,12 +404,14 @@ class ProcessPageView(
    * Installs a fresh snapshot.
    *
    * The current page is kept when it still exists in the new list and clamped
-   * otherwise; the filter is untouched.
+   * otherwise; the filter is untouched. A new snapshot clears the selection,
+   * because its rows may no longer describe the same process.
    *
    * @param processes parsed PSS rows, already in dump order
    * @param capturedAt epoch millis the dump finished, the footer's age origin
    */
   fun setData(processes: List<ProcessMemory>, capturedAt: Long) {
+    clearSelection()
     this.processes = processes
     this.capturedAt = capturedAt
     this.now = System.currentTimeMillis()
@@ -263,6 +425,7 @@ class ProcessPageView(
    * @param message the service's reason; a retry hint is appended here
    */
   fun setError(message: String) {
+    clearSelection()
     stateMessage = message
     content = Content.ERROR
     render()
@@ -275,6 +438,7 @@ class ProcessPageView(
    * @param showStart true only when the service can offer the Shizuku manager
    */
   fun setUnavailable(message: String, showStart: Boolean) {
+    clearSelection()
     stateMessage = message
     this.showStart = showStart
     content = Content.UNAVAILABLE
@@ -282,10 +446,28 @@ class ProcessPageView(
   }
 
   /**
+   * Keeps the selection while reporting why a stop failed.
+   *
+   * The bar switches to `Couldn't stop <label>`, the service's message and the
+   * tier reason, with Stop (a retry, still confirmed) and Cancel. Called by the
+   * service on the main thread; the selection is kept only if one still exists
+   * (a stale result must not resurrect a cancelled selection).
+   */
+  fun setStopError(message: String) {
+    if (selected == null) return
+    stopError = message
+    confirming = false
+    stopping = false
+    render()
+  }
+
+  /**
    * Updates the summary line and the snapshot age from the normal poll.
    *
    * The process rows stay a snapshot; only the `Used …` figures and `updated …`
-   * text change. Called on the main thread every poll while the page is open.
+   * text change. Called on the main thread every poll while the page is open. A
+   * selection survives the poll: the summary keeps updating and the selection
+   * bar stays in place of the hidden age/pager.
    */
   fun setRam(ram: RamUsage?, now: Long) {
     this.ram = ram
@@ -322,10 +504,19 @@ class ProcessPageView(
     }
 
   /**
-   * One fixed-height list row: name with weight 1, ellipsized at the end, and
-   * the PSS value flush right. Rows are not clickable (T17 has no detail view).
+   * One list row: a 2 dp selection accent, the name with weight 1 and the PSS
+   * value flush right. The row itself is the touch and accessibility target; at
+   * the 7 dp vertical padding the target is about 26 dp tall, which is the
+   * point of T18's larger row (small-target mis-taps were the user's concern).
    */
   private fun buildRow(): RowHolder {
+    val accent = View(context).apply {
+      setBackgroundColor(Palette.blue)
+      visibility = INVISIBLE
+      isFocusable = false
+      isClickable = false
+      importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
     val name = TextView(context).apply {
       setTextColor(Palette.white)
       setTextSize(TypedValue.COMPLEX_UNIT_SP, ROW_TEXT_SIZE_SP)
@@ -349,12 +540,18 @@ class ProcessPageView(
       orientation = HORIZONTAL
       gravity = Gravity.CENTER_VERTICAL
       setPadding(0, dp(ROW_PAD_V_DP), 0, dp(ROW_PAD_V_DP))
-      isFocusable = false
-      isClickable = false
+      isFocusable = true
+      isClickable = true
+      addView(
+        accent,
+        LayoutParams(dp(ACCENT_WIDTH_DP), dp(ACCENT_HEIGHT_DP)).apply {
+          marginEnd = dp(ACCENT_GAP_DP)
+        },
+      )
       addView(name, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
       addView(value, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
     }
-    return RowHolder(container, name, value)
+    return RowHolder(container, accent, name, value)
   }
 
   /**
@@ -421,52 +618,254 @@ class ProcessPageView(
       setOnClickListener { onClick() }
     }
 
-  /** Switches the filter, resets to the first page and repaints (T17). */
+  /**
+   * One selection-bar button: rounded [fill], white 10 sp monospace text.
+   *
+   * @param text visible label, also the base of the content description
+   * @param fill `Stop` red or `Cancel` gray
+   */
+  private fun selectionButton(text: String, fill: Int, onClick: () -> Unit): TextView =
+    TextView(context).apply {
+      this.text = text
+      contentDescription = text
+      setTextColor(Palette.white)
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, BUTTON_TEXT_SIZE_SP)
+      typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+      gravity = Gravity.CENTER
+      background = GradientDrawable().apply {
+        cornerRadius = BUTTON_RADIUS_DP * resources.displayMetrics.density
+        setColor(fill)
+      }
+      minWidth = 0
+      minimumWidth = 0
+      minHeight = 0
+      minimumHeight = 0
+      setPadding(dp(BUTTON_PAD_H_DP), dp(BUTTON_PAD_V_DP), dp(BUTTON_PAD_H_DP), dp(BUTTON_PAD_V_DP))
+      isFocusable = true
+      isClickable = true
+      setOnClickListener { onClick() }
+    }
+
+  /**
+   * Switches the filter, resets to the first page and drops the selection.
+   *
+   * A selection belongs to a row in one filter; the other list may not contain
+   * it, so it must not survive the switch.
+   */
   private fun selectMode(next: Mode) {
     if (mode == next) return
     mode = next
     pageIndex = 0
+    clearSelection()
     render()
   }
 
-  /** Moves one page; the target is clamped by [render]'s slice. */
+  /** Moves one page and drops the selection; the target is clamped by [render]. */
   private fun goToPage(target: Int) {
     if (content != Content.DATA) return
+    clearSelection()
     val count = pageSlice(displayItems(), 0).count
     pageIndex = target.coerceIn(0, (count - 1).coerceAtLeast(0))
     render()
   }
 
   /**
+   * The header's Back: a selection is cancelled first, and only a page with no
+   * selection returns to the card. A stop in flight cannot be cancelled, so
+   * Back leaves the page and lets the service drop the late result.
+   */
+  private fun onBackTapped() {
+    if (selected != null && !stopping) {
+      clearSelection()
+      render()
+      return
+    }
+    callbacks.onBack()
+  }
+
+  /** Selects one row and shows its tier; nothing is stopped on this tap. */
+  private fun selectRow(row: DisplayRow) {
+    if (stopping) return
+    val target = stopTargetFor(row)
+    selected = row
+    selectedTarget = target
+    selectedDecision = stopDecision(target)
+    confirming = false
+    stopError = null
+    render()
+  }
+
+  /** Default selection state: a tier and, for warning rows, its reason. */
+  private fun onStopTapped() {
+    val decision = selectedDecision ?: return
+    if (stopping || decision.risk == StopRisk.PROTECTED) return
+    if (!confirming) {
+      // A retry after a failure goes through the same confirmation again.
+      stopError = null
+      confirming = true
+      render()
+      return
+    }
+    stopping = true
+    stopError = null
+    render()
+    selectedTarget?.let { callbacks.onStopRequested(it) }
+  }
+
+  /** Cancel clears the selection and restores the age/pager footer. */
+  private fun onCancelTapped() {
+    clearSelection()
+    render()
+  }
+
+  /** Drops every selection field; the caller repaints. */
+  private fun clearSelection() {
+    selected = null
+    selectedTarget = null
+    selectedDecision = null
+    confirming = false
+    stopping = false
+    stopError = null
+  }
+
+  /**
    * The current filter's rows in display order.
    *
    * Apps groups by base package (the pure [groupApps], which also hides
-   * `Native`/`System`) and resolves a [PackageManager] label; Processes shows
-   * the sorted full process name.
+   * `Native`/`System`), carries every raw OOM group of that package and keeps
+   * `pid` null because the stop acts on the package. Processes shows the sorted
+   * full process name and resolves its base package for the policy; an
+   * unresolved base (a native binary or a package hidden from this app) stays
+   * null and therefore protected.
    */
   private fun displayItems(): List<DisplayRow> = when (mode) {
-    Mode.APPS -> groupApps(sortProcesses(processes)).map { app ->
-      DisplayRow(appLabel(app.packageName), app.pssKb)
+    Mode.APPS -> {
+      val groupsByPackage = processes
+        .groupBy({ it.name.substringBefore(':') }, { it.group })
+        .mapValues { (_, groups) -> groups.toSet() }
+      groupApps(sortProcesses(processes)).map { app ->
+        DisplayRow(
+          label = appLabel(app.packageName),
+          pssKb = app.pssKb,
+          packageName = app.packageName,
+          groups = groupsByPackage[app.packageName].orEmpty(),
+          pid = null,
+          processCount = app.processCount,
+        )
+      }
     }
 
-    Mode.PROCESSES -> sortProcesses(processes).map { process ->
-      DisplayRow(process.name, process.pssKb)
+    Mode.PROCESSES -> {
+      val counts = processes.groupingBy { it.name.substringBefore(':') }.eachCount()
+      sortProcesses(processes).map { process ->
+        val base = process.name.substringBefore(':')
+        DisplayRow(
+          label = process.name,
+          pssKb = process.pssKb,
+          packageName = if (resolveApplicationInfo(base) != null) base else null,
+          groups = setOf(process.group),
+          pid = process.pid,
+          processCount = (counts[base] ?: 1).coerceAtLeast(1),
+        )
+      }
     }
+  }
+
+  /**
+   * Builds the policy input for [row] (ANDROID.md §3, §9 T18).
+   *
+   * Apps rows are known apps even when package visibility hides their
+   * [ApplicationInfo]; the policy then sees [StopTarget.detailsHidden] and
+   * keeps them stoppable with a warning. Processes rows are known only when
+   * their base package resolves, so native/unknown names are protected. All
+   * Android flags and the launcher/IME/self/Shizuku identities come from the
+   * same cached lookups the list uses.
+   */
+  private fun stopTargetFor(row: DisplayRow): StopTarget {
+    val appRow = mode == Mode.APPS
+    val packageName = row.packageName
+    val info = packageName?.let { resolveApplicationInfo(it) }
+    return StopTarget(
+      packageName = packageName,
+      uid = info?.uid,
+      groups = row.groups,
+      isKnownApp = appRow || info != null,
+      isSystemApp = info != null && (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+      isUpdatedSystemApp = info != null &&
+        (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0,
+      isPersistent = info != null && (info.flags and ApplicationInfo.FLAG_PERSISTENT) != 0,
+      detailsHidden = appRow && info == null,
+      isLauncher = packageName != null && launcherPackages().contains(packageName),
+      isIme = packageName != null && packageName == currentImePackage(),
+      isSelf = packageName != null && packageName == context.packageName,
+      isShizuku = packageName == SHIZUKU_PACKAGE,
+    )
+  }
+
+  /**
+   * Resolves and caches one package's [ApplicationInfo].
+   *
+   * A hidden or missing package caches as null so the list, the stop target and
+   * the label never disagree for the same snapshot. Package visibility is not
+   * broadened: the lookup sees exactly what the app is allowed to see.
+   */
+  private fun resolveApplicationInfo(packageName: String): ApplicationInfo? {
+    if (infoCache.containsKey(packageName)) return infoCache[packageName]
+    val info = try {
+      context.packageManager.getApplicationInfo(packageName, 0)
+    } catch (e: PackageManager.NameNotFoundException) {
+      null
+    } catch (e: Exception) {
+      null
+    }
+    infoCache[packageName] = info
+    return info
   }
 
   /** Package label if the package is installed, otherwise the package name. */
   private fun appLabel(packageName: String): String {
     labelCache[packageName]?.let { return it }
-    val label = try {
-      val manager = context.packageManager
-      manager.getApplicationLabel(manager.getApplicationInfo(packageName, 0)).toString()
-    } catch (e: PackageManager.NameNotFoundException) {
-      packageName
-    } catch (e: Exception) {
+    val info = resolveApplicationInfo(packageName)
+    val label = if (info != null) {
+      try {
+        context.packageManager.getApplicationLabel(info).toString()
+      } catch (e: Exception) {
+        packageName
+      }
+    } else {
       packageName
     }
     labelCache[packageName] = label
     return label
+  }
+
+  /** Launcher packages, resolved once from the HOME intent and cached. */
+  private fun launcherPackages(): Set<String> {
+    launcherPackages?.let { return it }
+    val packages = try {
+      val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+      context.packageManager.queryIntentActivities(intent, 0)
+        .mapNotNull { it.activityInfo?.packageName }
+        .toSet()
+    } catch (e: Exception) {
+      emptySet()
+    }
+    launcherPackages = packages
+    return packages
+  }
+
+  /** The current default IME package, read once from secure settings. */
+  private fun currentImePackage(): String? {
+    if (imeLoaded) return imePackage
+    imeLoaded = true
+    imePackage = try {
+      Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        ?.substringBefore('/')
+        ?.takeIf { it.isNotEmpty() }
+    } catch (e: Exception) {
+      null
+    }
+    return imePackage
   }
 
   /** Repaints every region from the current state; the single render path. */
@@ -476,17 +875,19 @@ class ProcessPageView(
     pageIndex = slice.index
     val data = content == Content.DATA
     val hasItems = data && items.isNotEmpty()
+    val hasSelection = selected != null
 
     listContainer.visibility = if (hasItems) VISIBLE else GONE
     stateContainer.visibility = if (hasItems) GONE else VISIBLE
-    footerRow.visibility = if (data) VISIBLE else GONE
+    footerRow.visibility = if (data && !hasSelection) VISIBLE else GONE
+    selectionBar.visibility = if (hasSelection) VISIBLE else GONE
 
     styleModeChip(appsChip, mode == Mode.APPS)
     styleModeChip(processesChip, mode == Mode.PROCESSES)
     summaryText.text = summaryLine()
 
     when (content) {
-      Content.LOADING -> showState("Scanning processes\u2026", start = false)
+      Content.LOADING -> showState(loadingMessage, start = false)
       Content.ERROR -> showState("$stateMessage\nTap Refresh to retry.", start = false)
       Content.UNAVAILABLE -> showState(stateMessage, start = showStart)
       Content.DATA -> {
@@ -500,6 +901,8 @@ class ProcessPageView(
         }
       }
     }
+
+    if (hasSelection) bindSelectionBar()
 
     // Refresh answers a tap in every state but the one already scanning. It
     // stays white on its gray fill and only dims, so the label never disappears.
@@ -517,22 +920,137 @@ class ProcessPageView(
     stateContainer.visibility = VISIBLE
   }
 
+  /**
+   * Binds the visible rows, including their selection state.
+   *
+   * The container is the clickable/focusable target and carries the accessible
+   * name; the child texts stay out of the accessibility tree so TalkBack reads
+   * one row, not three fragments.
+   */
   private fun bindRows(items: List<DisplayRow>) {
     rows.forEachIndexed { index, holder ->
       val item = items.getOrNull(index)
       if (item == null) {
         holder.container.visibility = GONE
       } else {
+        val selected = isSelected(item)
         holder.container.visibility = VISIBLE
-        holder.name.text = item.name
+        holder.name.text = item.label
         holder.value.text = fmtProcessRam(item.pssKb)
+        holder.accent.visibility = if (selected) VISIBLE else INVISIBLE
+        holder.container.background = rowBackground(selected)
+        holder.container.contentDescription = rowDescription(item, selected)
+        holder.container.setOnClickListener { selectRow(item) }
       }
     }
+  }
+
+  /** True when [row] is the current selection; rows are value-equal. */
+  private fun isSelected(row: DisplayRow): Boolean = selected == row
+
+  /** The selected tint, or a transparent fill that keeps the row tappable. */
+  private fun rowBackground(selected: Boolean): Drawable =
+    GradientDrawable().apply {
+      cornerRadius = ROW_RADIUS_DP * resources.displayMetrics.density
+      setColor(if (selected) SELECTED_ROW_TINT else Color.TRANSPARENT)
+    }
+
+  /** `AICore 956M, select to stop`-style row text with the selected state. */
+  private fun rowDescription(row: DisplayRow, selected: Boolean): String {
+    val count = if (mode == Mode.APPS && row.processCount > 1) {
+      ", ${row.processCount} processes"
+    } else {
+      ""
+    }
+    val state = if (selected) {
+      "Selected. Use the selection bar to stop it."
+    } else {
+      "Select to stop."
+    }
+    return "${row.label} ${fmtProcessRam(row.pssKb)}$count. $state"
+  }
+
+  /**
+   * Fills the selection bar for the current state.
+   *
+   * Initial: the name and PSS as the title and the tier as the meta. After the
+   * first Stop tap it becomes `Stop <name>?` plus the whole-app sentence; while
+   * the stop runs both buttons are hidden; after a failure it becomes
+   * `Couldn't stop <name>` plus the message and the reason, with Stop/Cancel so
+   * the user can retry or cancel. Protected rows never receive a Stop button.
+   */
+  private fun bindSelectionBar() {
+    val row = selected ?: return
+    val decision = selectedDecision ?: return
+    val name = selectionName(row)
+    val error = stopError
+    val risk = decision.risk
+
+    selectionTitle.text = when {
+      stopping -> "Stopping $name\u2026"
+      error != null -> "Couldn't stop $name"
+      confirming -> "Stop $name?"
+      else -> when (mode) {
+        Mode.APPS -> "$name \u00b7 ${fmtProcessRam(row.pssKb)}"
+        Mode.PROCESSES ->
+          "$name (pid ${row.pid}) \u00b7 ${fmtProcessRam(row.pssKb)}"
+      }
+    }
+
+    selectionMeta.text = when {
+      error != null -> listOfNotNull(error, decision.reason).joinToString(" \u00b7 ")
+      confirming -> confirmationMeta(row, decision)
+      risk == StopRisk.PROTECTED -> "PROTECTED \u00b7 ${decision.reason}"
+      risk == StopRisk.WARNING -> "WARNING \u00b7 ${decision.reason}"
+      else -> packageText(row)
+    }
+    selectionMeta.setTextColor(
+      when {
+        error != null -> Palette.red
+        risk == StopRisk.WARNING -> Palette.amber
+        else -> Palette.gray
+      },
+    )
+
+    val stoppable = risk != StopRisk.PROTECTED
+    stopButton.visibility = if (stoppable && !stopping) VISIBLE else GONE
+    cancelButton.visibility = if (stopping) GONE else VISIBLE
+    stopButton.isEnabled = !stopping
+    cancelButton.isEnabled = !stopping
+    val label = if (mode == Mode.PROCESSES) "Stop app" else "Stop"
+    stopButton.text = label
+    stopButton.contentDescription = if (mode == Mode.PROCESSES) {
+      "Stop $name and all of its processes"
+    } else {
+      "Stop $name"
+    }
+    cancelButton.contentDescription = "Cancel selection"
+  }
+
+  /** The short name used in the bar and its titles. */
+  private fun selectionName(row: DisplayRow): String = when (mode) {
+    Mode.APPS -> row.label
+    Mode.PROCESSES -> row.packageName ?: row.label
+  }
+
+  /** The package line for a NORMAL row, with the row name as the fallback. */
+  private fun packageText(row: DisplayRow): String =
+    row.packageName?.takeIf { it.isNotEmpty() } ?: selectionName(row)
+
+  /** `WARNING · reason · This stops every process of the app.` or the package line. */
+  private fun confirmationMeta(row: DisplayRow, decision: StopDecision): String {
+    val base = if (decision.risk == StopRisk.WARNING) {
+      "WARNING \u00b7 ${decision.reason}"
+    } else {
+      packageText(row)
+    }
+    return "$base \u00b7 This stops every process of the app."
   }
 
   /**
    * Fills the footer: `PSS · N apps · just now` on the left and the pager on the
    * right. With no rows the pager reads `0 of 0` and both arrows are disabled.
+   * Hidden while a selection bar replaces it.
    */
   private fun bindFooter(slice: PageSlice<DisplayRow>, total: Int) {
     footerText.text = "PSS \u00b7 " +
@@ -559,15 +1077,32 @@ class ProcessPageView(
 
   /**
    * The page's accessibility text, in the spec's shape:
-   * `RAM by process, Apps, 42 apps, updated just now`. Non-data states name
-   * themselves so TalkBack never reads a stale count.
+   * `RAM by process, Apps, 42 apps, updated just now`, plus the selected row
+   * and its tier (and a stop failure) while the selection bar is visible.
+   * Non-data states name themselves so TalkBack never reads a stale count.
    */
-  private fun pageDescription(total: Int): String = when (content) {
-    Content.LOADING -> "RAM by process, scanning"
-    Content.ERROR -> "RAM by process, error, $stateMessage"
-    Content.UNAVAILABLE -> "RAM by process, unavailable, $stateMessage"
-    Content.DATA -> "RAM by process, ${mode.label}, " +
-      "${fmtProcessCount(total, mode.apps)}, updated ${fmtAge(now - capturedAt)}"
+  private fun pageDescription(total: Int): String {
+    val base = when (content) {
+      Content.LOADING -> "RAM by process, scanning"
+      Content.ERROR -> "RAM by process, error, $stateMessage"
+      Content.UNAVAILABLE -> "RAM by process, unavailable, $stateMessage"
+      Content.DATA -> "RAM by process, ${mode.label}, " +
+        "${fmtProcessCount(total, mode.apps)}, updated ${fmtAge(now - capturedAt)}"
+    }
+    val row = selected ?: return base
+    val decision = selectedDecision ?: return base
+    val riskWord = when (decision.risk) {
+      StopRisk.PROTECTED -> "protected"
+      StopRisk.WARNING -> "warning"
+      StopRisk.NORMAL -> "normal"
+    }
+    val state = when {
+      stopping -> ", stopping"
+      stopError != null -> ", stop failed"
+      confirming -> ", confirm stop"
+      else -> ""
+    }
+    return "$base, selected ${selectionName(row)}, $riskWord$state"
   }
 
   private fun dp(value: Float): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
@@ -578,6 +1113,10 @@ class ProcessPageView(
     private const val FOOTER_TEXT_SIZE_SP = 9f
     private const val BUTTON_TEXT_SIZE_SP = 10f
 
+    /** Selection bar: title / meta / button text sizes from the spec. */
+    private const val SELECTION_TITLE_SIZE_SP = 10f
+    private const val SELECTION_META_SIZE_SP = 9f
+
     /** Slight tracking, as the spec asks for a letter-spaced header. */
     private const val TITLE_LETTER_SPACING = 0.08f
 
@@ -586,12 +1125,24 @@ class ProcessPageView(
     private const val BUTTON_PAD_V_DP = 2f
     private const val CHIP_GAP_DP = 6f
 
-    private const val ROW_PAD_V_DP = 2f
+    /** ~26 dp rows: 7 dp padding above and below the 10 sp line (T18). */
+    private const val ROW_PAD_V_DP = 7f
     private const val VALUE_GAP_DP = 6f
     private const val ROW_GAP_DP = 6f
     private const val ROW_TOP_GAP_DP = 4f
     private const val STATE_TOP_GAP_DP = 8f
     private const val STATE_BUTTON_GAP_DP = 6f
+
+    /** Selected row: 2 dp blue accent and the blue-tinted `0x332F81F7` fill. */
+    private const val ACCENT_WIDTH_DP = 2f
+    private const val ACCENT_HEIGHT_DP = 18f
+    private const val ACCENT_GAP_DP = 4f
+    private const val ROW_RADIUS_DP = 4f
+    private const val SELECTED_ROW_TINT = 0x332F81F7
+
+    private const val SELECTION_META_GAP_DP = 2f
+    private const val SELECTION_BUTTON_TOP_GAP_DP = 4f
+    private const val SELECTION_BUTTON_GAP_DP = 6f
 
     private const val PAGER_PAD_H_DP = 4f
     private const val PAGER_PAD_V_DP = 1f
@@ -599,5 +1150,11 @@ class ProcessPageView(
 
     /** Dims a disabled control without hiding its label against the same gray. */
     private const val DISABLED_ALPHA = 0.5f
+
+    /** Default state text; the service overrides it after a successful stop. */
+    const val DEFAULT_LOADING_MESSAGE = "Scanning processes\u2026"
+
+    /** Shell provider package; stopping it would remove the stop route. */
+    private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
   }
 }

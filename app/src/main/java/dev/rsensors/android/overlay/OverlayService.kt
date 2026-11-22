@@ -25,11 +25,14 @@ import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.ReadingHistory
 import dev.rsensors.android.core.RamUsage
+import dev.rsensors.android.core.StopRisk
+import dev.rsensors.android.core.StopTarget
 import dev.rsensors.android.core.Strip
 import dev.rsensors.android.core.VisibilityKind
 import dev.rsensors.android.core.iconSpec
 import dev.rsensors.android.core.parseFpsReply
 import dev.rsensors.android.core.parseMeminfoPss
+import dev.rsensors.android.core.stopDecision
 import dev.rsensors.android.core.stripSegments
 import dev.rsensors.android.source.BatterySource
 import dev.rsensors.android.source.DemoSource
@@ -41,6 +44,7 @@ import dev.rsensors.android.source.SensorSource
 import dev.rsensors.android.source.SessionStore
 import dev.rsensors.android.source.ShizukuDumpsysRunner
 import dev.rsensors.android.source.SourceChain
+import dev.rsensors.android.source.StopRunner
 import dev.rsensors.android.source.SysfsSource
 import dev.rsensors.android.source.ThermalStatusSource
 import dev.rsensors.android.ui.DiagnosticsActivity
@@ -116,6 +120,15 @@ import rikka.shizuku.Shizuku
  * age through `setReading`, so the pill, notification and recording continue
  * unchanged while the list stays a snapshot.
  *
+ * T18 adds Stop from a selected page row. The page re-checks the pure
+ * `StopPolicy` before showing Stop, and the service re-checks it again before
+ * acting. `am force-stop <package>` runs through the same Shizuku UserService on
+ * the meminfo thread, never on the main thread or the 2 s poll; a reply carries
+ * a stop generation that is bumped on page open/close and [onDestroy], so a
+ * late result cannot touch a newer page. `OK` rescans once with
+ * `Stop requested — refreshing…`; `ERR …` or no reply returns to the page's
+ * selection bar with the reason.
+ *
  * State: [isRunning] and [isRecording] are process-wide flags for the activity's
  * UI. [isRunning] turns true only after the window is attached and false in
  * [onDestroy], so the activity never claims a running overlay that failed to
@@ -183,6 +196,14 @@ class OverlayService : Service() {
   @Volatile private var meminfoRunner: MeminfoRunner? = null
 
   /**
+   * Stop path for the T18 selection bar, sharing the same Shizuku UserService
+   * binding; null in demo mode and after teardown. Volatile because it is set
+   * when the source is built on the worker and read from the main thread's stop
+   * request.
+   */
+  @Volatile private var stopRunner: StopRunner? = null
+
+  /**
    * The process page's own thread: `dumpsys meminfo --oom` takes ~2 s and must
    * never ride the 2 s thermal poll (ANDROID.md §9, §8 T17).
    */
@@ -197,6 +218,15 @@ class OverlayService : Service() {
 
   /** True between posting a scan and handling its result. Main thread. */
   private var processScanInFlight = false
+
+  /** True between posting a stop and handling its reply. Main thread. */
+  private var stopInFlight = false
+
+  /**
+   * Invalidates a stop reply the page no longer wants; bumped on page
+   * open/close and [onDestroy]. Main thread, like the rest of the stop state.
+   */
+  private var stopGeneration = 0
 
   /**
    * Last successful snapshot, restored when a scan is cancelled before it
@@ -362,8 +392,11 @@ class OverlayService : Service() {
    *
    * Missing prerequisites resolve to the page's stable unavailable/error states
    * instead of inventing rows.
+   *
+   * @param message state text for the scan; the stop success path passes
+   *   `Stop requested — refreshing…` so the page reports what triggered it
    */
-  private fun startProcessScan() {
+  private fun startProcessScan(message: String = SCAN_MESSAGE) {
     if (!processPageOpen) return
     val generation = ++processScanGeneration
 
@@ -394,7 +427,7 @@ class OverlayService : Service() {
     }
 
     processScanInFlight = true
-    view?.setProcessPageLoading()
+    view?.setProcessPageLoading(message)
     Log.i(TAG, "meminfo scan start")
     handler.post {
       val raw = try {
@@ -464,6 +497,91 @@ class OverlayService : Service() {
     }
   }
 
+  /**
+   * Runs one confirmed stop for the open page (T18).
+   *
+   * Called on the main thread from the selection bar. The view already checked
+   * the policy, but the service re-checks it because the selection can be a
+   * moment old; a protected target is refused with a visible error instead of
+   * reaching the shell. The `am force-stop` call runs on [meminfoHandler], never
+   * the main thread or the 2 s poll worker, and its reply is applied only when
+   * the page is still open and the stop generation still matches.
+   *
+   * A missing shell route (demo, Shizuku down, permission revoked) becomes a
+   * page error, never a crash. The stop command itself cannot be cancelled;
+   * closing the page only drops the UI result.
+   *
+   * @param target the selected row's policy input, with a non-null package
+   */
+  private fun requestStop(target: StopTarget) {
+    if (!processPageOpen || stopInFlight) return
+    val packageName = target.packageName ?: return
+    if (stopDecision(target).risk == StopRisk.PROTECTED) {
+      view?.setProcessPageStopError("This app is protected.")
+      return
+    }
+    if (OverlayPreferences.isDemo(this)) {
+      view?.setProcessPageStopError("Stops are not available in demo mode")
+      return
+    }
+    if (!isShizukuRunning()) {
+      view?.setProcessPageStopError("Shizuku is not running")
+      return
+    }
+    if (!hasShizukuPermission()) {
+      view?.setProcessPageStopError("Grant Shizuku permission to stop apps")
+      return
+    }
+    val runner = stopRunner
+    val handler = meminfoHandler
+    if (runner == null || handler == null) {
+      view?.setProcessPageStopError("Stop is unavailable")
+      return
+    }
+
+    stopInFlight = true
+    val generation = stopGeneration
+    Log.i(TAG, "stop request pkg=$packageName")
+    handler.post {
+      val reply = try {
+        runner.stopPackage(packageName)
+      } catch (e: Exception) {
+        Log.w(TAG, "stop failed", e)
+        null
+      }
+      mainHandler.post { finishStop(generation, packageName, reply) }
+    }
+  }
+
+  /**
+   * Applies a stop reply on the main thread, if it is still wanted.
+   *
+   * A closed/reopened page or a newer stop drops the reply silently; the
+   * in-flight flag was already reset by whoever invalidated the generation (or
+   * is reset here for a matching request). `OK` starts exactly one rescan so the
+   * list reflects the stop; anything else goes back to the page's selection bar
+   * with the reason, because the stop may have failed.
+   */
+  private fun finishStop(generation: Int, packageName: String, reply: String?) {
+    if (!processPageOpen || generation != stopGeneration) {
+      Log.i(TAG, "stop result dropped")
+      return
+    }
+    stopInFlight = false
+    if (reply == "OK") {
+      Log.i(TAG, "stop ok pkg=$packageName")
+      startProcessScan(STOP_REFRESH_MESSAGE)
+      return
+    }
+    val message = reply
+      ?.removePrefix("ERR ")
+      ?.trim()
+      ?.ifEmpty { "Stop failed" }
+      ?: "No response from Shizuku"
+    view?.setProcessPageStopError(message)
+    Log.w(TAG, "stop failed: $message")
+  }
+
   /** Callbacks the panel raises; all arrive on the main thread. */
   private val viewCallbacks = object : OverlayView.Callbacks {
     override fun onToggleExpanded() {
@@ -513,6 +631,10 @@ class OverlayService : Service() {
 
     override fun onProcessPageOpened() {
       processPageOpen = true
+      // A new page (or a reopened one) must not receive a stop reply from the
+      // previous session, and starts with no stop in flight.
+      stopGeneration += 1
+      stopInFlight = false
       startProcessScan()
     }
 
@@ -521,10 +643,16 @@ class OverlayService : Service() {
       // Any result still on the main queue belongs to the closed page.
       processScanGeneration += 1
       processScanInFlight = false
+      stopGeneration += 1
+      stopInFlight = false
     }
 
     override fun onProcessRefresh() {
       if (processPageOpen) startProcessScan()
+    }
+
+    override fun onStopRequested(target: StopTarget) {
+      requestStop(target)
     }
 
     override fun onPositionChanged(x: Int, y: Int, expanded: Boolean) {
@@ -634,6 +762,10 @@ class OverlayService : Service() {
     processScanInFlight = false
     lastProcessSnapshot = null
     processPageOpen = false
+    // A stop result must not touch anything after teardown (T18).
+    stopGeneration += 1
+    stopInFlight = false
+    stopRunner = null
     meminfoThread?.quitSafely()
     meminfoThread = null
     meminfoHandler = null
@@ -806,14 +938,17 @@ class OverlayService : Service() {
     sysfsSource = null
     fpsRunner = null
     meminfoRunner = null
+    stopRunner = null
     if (OverlayPreferences.isDemo(this)) return DemoSource()
 
     // One runner for both calls: the thermal dump and the SurfaceFlinger probe
     // must share a single UserService binding (ANDROID.md §9).
     val runner = ShizukuDumpsysRunner(this)
     fpsRunner = runner
-    // The same binding answers the process page's meminfo scan (T17).
+    // The same binding answers the process page's meminfo scan (T17) and its
+    // confirmed stop (T18).
     meminfoRunner = runner
+    stopRunner = runner
     val sysfs =
       SysfsSource(
         reader = DirectReader(),
@@ -1024,6 +1159,12 @@ class OverlayService : Service() {
 
     /** Expanded-card cadence: the sparkline needs twice the resolution. */
     const val POLL_EXPANDED_MS = 2_000L
+
+    /** State text for a normal page scan (open or Refresh). */
+    private const val SCAN_MESSAGE = "Scanning processes\u2026"
+
+    /** State text for the one rescan after a successful stop (T18). */
+    private const val STOP_REFRESH_MESSAGE = "Stop requested \u2014 refreshing\u2026"
 
     const val ACTION_START = "dev.rsensors.android.overlay.START"
     const val ACTION_STOP = "dev.rsensors.android.overlay.STOP"

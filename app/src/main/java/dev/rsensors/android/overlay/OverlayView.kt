@@ -28,6 +28,7 @@ import dev.rsensors.android.core.RamUsage
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.Segment
 import dev.rsensors.android.core.SegmentKind
+import dev.rsensors.android.core.StopTarget
 import dev.rsensors.android.core.Strip
 import dev.rsensors.android.core.ThermalStatus
 import dev.rsensors.android.core.ValueRange
@@ -69,7 +70,9 @@ import kotlin.math.abs
  * - The RAM row opens the process page (T17): a second page with the same
  *   window, 280 dp wide, its own Back/Refresh and Apps/Processes filter. The
  *   normal card hides behind it and stays expanded; Back or a tap on the pill
- *   header returns to the 220 dp card.
+ *   header returns to the 220 dp card. A row's selection bar and its Stop
+ *   confirmation live in the page and reach the service through
+ *   [Callbacks.onStopRequested] (T18).
  *
  * The window itself stays `FLAG_NOT_FOCUSABLE` (it must never take input focus
  * from the app underneath); the buttons and chips are still clickable, focusable
@@ -118,6 +121,12 @@ class OverlayView(
     /** The process page's Refresh button was pressed (T17). */
     fun onProcessRefresh()
 
+    /**
+     * The process page confirmed a stop for [target] (T18). The service
+     * re-checks the policy and runs the shell stop off the main thread.
+     */
+    fun onStopRequested(target: StopTarget)
+
     /** The window settled at a new position (after snap); persist it. */
     fun onPositionChanged(x: Int, y: Int, expanded: Boolean)
   }
@@ -153,6 +162,10 @@ class OverlayView(
 
       override fun onStartShizuku() {
         callbacks.onStartShizuku()
+      }
+
+      override fun onStopRequested(target: StopTarget) {
+        callbacks.onStopRequested(target)
       }
     },
   )
@@ -502,11 +515,13 @@ class OverlayView(
    * Delegates the scanning state to the open page.
    *
    * The service calls this only for a scan it started while the page was open;
-   * the guard keeps a late result from touching the hidden page.
+   * the guard keeps a late result from touching the hidden page. [message] is
+   * the default scanning text, or `Stop requested — refreshing…` after a
+   * successful stop (T18).
    */
-  fun setProcessPageLoading() {
+  fun setProcessPageLoading(message: String = ProcessPageView.DEFAULT_LOADING_MESSAGE) {
     if (!pageOpen) return
-    processPage.setLoading()
+    processPage.setLoading(message)
     contentDescription = descriptionText()
   }
 
@@ -537,6 +552,18 @@ class OverlayView(
   fun setProcessPageUnavailable(message: String, showStart: Boolean) {
     if (!pageOpen) return
     processPage.setUnavailable(message, showStart)
+    contentDescription = descriptionText()
+  }
+
+  /**
+   * Delegates a failed stop to the open page (T18).
+   *
+   * The page keeps its selection, re-enables Stop/Cancel and shows the message
+   * with the tier reason; a late result for a closed page is dropped here.
+   */
+  fun setProcessPageStopError(message: String) {
+    if (!pageOpen) return
+    processPage.setStopError(message)
     contentDescription = descriptionText()
   }
 
