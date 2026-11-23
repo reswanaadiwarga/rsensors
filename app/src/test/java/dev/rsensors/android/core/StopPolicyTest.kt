@@ -173,6 +173,94 @@ class StopPolicyTest {
     )
   }
 
+  // --------------------------------------------------------------- OEM managers
+  //
+  // Hand-listed from the T19c-1 spec so a typo in the production set is caught.
+  private val oemPackages = listOf(
+    "com.miui.securitycenter",
+    "com.miui.powerkeeper",
+    "com.huawei.systemmanager",
+    "com.huawei.powergenie",
+    "com.hihonor.systemmanager",
+    "com.hihonor.powergenie",
+    "com.coloros.safecenter",
+    "com.coloros.phonemanager",
+    "com.coloros.securitypermission",
+    "com.coloros.apprecover",
+    "com.coloros.athena",
+    "com.coloros.gamespace",
+    "com.vivo.pem",
+    "com.iqoo.secure",
+    "com.vivo.abe",
+    "com.vivo.daemonService",
+    "com.vivo.permissionmanager",
+  )
+
+  @Test
+  fun `every OEM manager package is protected`() {
+    for (pkg in oemPackages) {
+      assertEquals(
+        pkg,
+        StopDecision(protected, "OEM system package."),
+        stopDecision(app(packageName = pkg)),
+      )
+    }
+  }
+
+  @Test
+  fun `OEM package matching ignores case and surrounding spaces`() {
+    assertEquals(
+      StopDecision(protected, "OEM system package."),
+      stopDecision(app(packageName = "  COM.MIUI.SECURITYCENTER  ")),
+    )
+    assertEquals(
+      StopDecision(protected, "OEM system package."),
+      stopDecision(app(packageName = "COM.VIVO.DAEMONSERVICE")),
+    )
+  }
+
+  @Test
+  fun `OEM package stays protected with persistent, system and in-use flags`() {
+    assertEquals(
+      StopDecision(protected, "OEM system package."),
+      stopDecision(
+        app(
+          packageName = "com.miui.securitycenter",
+          groups = setOf("Persistent", "Foreground"),
+          isSystemApp = true,
+          isUpdatedSystemApp = true,
+          isPersistent = true,
+        ),
+      ),
+    )
+    assertEquals(
+      StopDecision(protected, "OEM system package."),
+      stopDecision(
+        app(
+          packageName = "com.huawei.powergenie",
+          groups = setOf("Visible"),
+          isSystemApp = true,
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun `OEM package stays protected when its details are hidden`() {
+    assertEquals(
+      StopDecision(protected, "OEM system package."),
+      stopDecision(app(packageName = "com.coloros.athena", detailsHidden = true)),
+    )
+  }
+
+  @Test
+  fun `core package keeps the core reason ahead of the OEM check`() {
+    assertEquals(
+      StopDecision(protected, "Core system package."),
+      stopDecision(app(packageName = "com.android.phone", isSystemApp = true)),
+    )
+  }
+
   @Test
   fun `native and system OOM groups are protected`() {
     val protectedGroups = listOf(

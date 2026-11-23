@@ -75,6 +75,42 @@ private val CORE_PACKAGES = setOf(
   "com.android.providers.settings",
 )
 
+/**
+ * OEM manager/security/power packages that are not part of AOSP but are
+ * load-bearing on their vendor's builds: stopping them can drop device
+ * protection, battery/thermal management or the permission backend. Entries are
+ * lowercase because the lookup normalizes the target name first. They are not
+ * all system apps: some vendors ship them as updated-system or plain apps, so
+ * the name check is what protects them, not a flag.
+ *
+ * Conservative denylist, not a universal one: a vendor not listed here is not
+ * safe to stop, it is merely unknown, and other builds of the same vendor may
+ * not ship these exact names.
+ */
+private val OEM_PACKAGES = setOf(
+  // Xiaomi / HyperOS
+  "com.miui.securitycenter",
+  "com.miui.powerkeeper",
+  // Huawei / HONOR
+  "com.huawei.systemmanager",
+  "com.huawei.powergenie",
+  "com.hihonor.systemmanager",
+  "com.hihonor.powergenie",
+  // ColorOS / Oppo / Realme
+  "com.coloros.safecenter",
+  "com.coloros.phonemanager",
+  "com.coloros.securitypermission",
+  "com.coloros.apprecover",
+  "com.coloros.athena",
+  "com.coloros.gamespace",
+  // vivo / iQOO
+  "com.vivo.pem",
+  "com.iqoo.secure",
+  "com.vivo.abe",
+  "com.vivo.daemonservice",
+  "com.vivo.permissionmanager",
+)
+
 /** Lowercase OOM groups that identify a process the system needs running. */
 private val PROTECTED_GROUPS = setOf(
   "native",
@@ -100,12 +136,12 @@ private fun String.normalized(): String = trim().lowercase(Locale.ROOT)
  *
  * The checks run in a fixed order because several flags overlap in practice:
  * this overlay and Shizuku outrank everything; unresolvable processes are
- * native and never stoppable; core UIDs and packages outrank their system and
- * persistent flags; and app-specific reasons (hidden details, AICore, GMS,
- * launcher, IME) outrank the generic "system app" and "currently in use"
- * sentences so the confirmation names the most useful cause. AICore in
- * particular is a system, updated-system, visible app but must stay stoppable
- * as a WARNING.
+ * native and never stoppable; core UIDs and AOSP/OEM denylisted packages
+ * outrank their system and persistent flags; and app-specific reasons (hidden
+ * details, AICore, GMS, launcher, IME) outrank the generic "system app" and
+ * "currently in use" sentences so the confirmation names the most useful cause.
+ * AICore in particular is a system, updated-system, visible app but must stay
+ * stoppable as a WARNING.
  *
  * Pure: no Android APIs and no side effects.
  */
@@ -122,11 +158,13 @@ fun stopDecision(target: StopTarget): StopDecision {
   val uid = target.uid
   if (uid != null && uid < 10000) return protected("Core system process.")
 
+  // Both name denylists are checked before the flags so a listed package reports
+  // its real cause even when it also carries FLAG_PERSISTENT (systemui, phone and
+  // several OEM managers do).
   val packageName = target.packageName.normalized()
   if (packageName in CORE_PACKAGES) return protected("Core system package.")
+  if (packageName in OEM_PACKAGES) return protected("OEM system package.")
 
-  // The denylist is checked first so a core package reports its real cause even
-  // when it also carries FLAG_PERSISTENT (systemui and phone both do).
   if (target.isPersistent) return protected("Persistent app.")
 
   val groups = target.groups.map { it.normalized() }.toSet()
