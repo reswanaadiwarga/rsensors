@@ -88,6 +88,119 @@ class ProcessMemoryTest {
   }
 
   @Test
+  fun `work profile user suffix parses with and without an activities suffix`() {
+    val raw = """
+      Total PSS by OOM adjustment:
+          9,000K: Cached
+             52,345kB: com.example.notes (pid 4100) (user 10)
+             12,345K: com.example.notes:remote (pid 4101) (user 10)
+             21,000K: com.example.photos (pid 4200 / activities) (user 10)
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("com.example.notes", 4100, 52_345L, "Cached"),
+        ProcessMemory("com.example.notes:remote", 4101, 12_345L, "Cached"),
+        ProcessMemory("com.example.photos", 4200, 21_000L, "Cached"),
+      ),
+      parseMeminfoPss(raw),
+    )
+  }
+
+  @Test
+  fun `kB and KB unit variants parse in process rows and group totals`() {
+    val raw = """
+      Total PSS by OOM adjustment:
+          1,300,000kB: Cached
+             52,345KB: com.example.big (pid 4100)
+          120,000Kb: Persistent Service
+              8,000kb: com.example.small (pid 4101)
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("com.example.big", 4100, 52_345L, "Cached"),
+        ProcessMemory("com.example.small", 4101, 8_000L, "Persistent Service"),
+      ),
+      parseMeminfoPss(raw),
+    )
+  }
+
+  @Test
+  fun `pid suffix forms parse with and without spaces`() {
+    val raw = """
+      Total PSS by OOM adjustment:
+          9,000K: Cached
+             52,345K: com.example.a (pid 4100 / activities)
+             52,345K: com.example.b (pid 4101/activities)
+             52,345K: com.example.c (pid 4102:remote)
+             52,345K: com.example.d (pid 4103 :remote)
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("com.example.a", 4100, 52_345L, "Cached"),
+        ProcessMemory("com.example.b", 4101, 52_345L, "Cached"),
+        ProcessMemory("com.example.c", 4102, 52_345L, "Cached"),
+        ProcessMemory("com.example.d", 4103, 52_345L, "Cached"),
+      ),
+      parseMeminfoPss(raw),
+    )
+  }
+
+  @Test
+  fun `pid and user keywords are case-insensitive`() {
+    val raw = """
+      Total PSS by OOM adjustment:
+          9,000K: Cached
+             1,000K: com.example.a (PID 10) (User 10)
+    """.trimIndent()
+
+    assertEquals(
+      listOf(ProcessMemory("com.example.a", 10, 1_000L, "Cached")),
+      parseMeminfoPss(raw),
+    )
+  }
+
+  @Test
+  fun `an unclean heading resets the group to Unknown`() {
+    val raw = """
+      Total PSS by OOM adjustment:
+          9,000K: Cached
+              1,000K: com.example.before (pid 10)
+          7,000K: Cached+isolated
+              2,000K: com.example.after (pid 11)
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("com.example.before", 10, 1_000L, "Cached"),
+        ProcessMemory("com.example.after", 11, 2_000L, "Unknown"),
+      ),
+      parseMeminfoPss(raw),
+    )
+  }
+
+  @Test
+  fun `a malformed pid row leaves the group unchanged`() {
+    val raw = """
+      Total PSS by OOM adjustment:
+          9,000K: Persistent Service
+              1,000K: com.example.before (pid 10)
+              3,000K: com.example.truncated (pid 13
+              2,000K: com.example.after (pid 11)
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("com.example.before", 10, 1_000L, "Persistent Service"),
+        ProcessMemory("com.example.after", 11, 2_000L, "Persistent Service"),
+      ),
+      parseMeminfoPss(raw),
+    )
+  }
+
+  @Test
   fun `a missing PSS header returns no rows`() {
     val raw = """
       Total RSS by OOM adjustment:

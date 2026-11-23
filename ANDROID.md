@@ -4,17 +4,17 @@ Development design and task log. Public overview: [README.md](README.md);
 architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
-Status: **T0-T19a plus the record toggle, snap toggle and T19b-1 FPS parser,
-complete in code.** The RAM pill, process-memory page and Stop app are committed
-on `feat/stop-app` (T17 is on the parent `feat/process-ram`) and
-installed/device-verified on the target (**280 tests** at T18). T19a adds the
-Diagnostics feature-status table on `feat/t19a-diagnostics` (**299 tests**, 160
+Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser and
+T19b-2 meminfo parser, complete in code.** The RAM pill, process-memory page and
+Stop app are committed on `feat/stop-app` (T17 is on the parent
+`feat/process-ram`) and installed/device-verified on the target (**280 tests** at
+T18). T19a adds the Diagnostics feature-status table (**299 tests**, 160
 independent acceptance checks; device-verified 2026-11-23 with caveats). Record
-and snap add 11 tests (**310 total**); T19b-1 adds 14 (**324 total**) on
-`feat/t19b-fps`, with an Android 16 device smoke only. The 0.2.0 release remains
-the published baseline and does not include these changes; local `main` has the
-earlier features, while `feat/t19b-fps` is unmerged. Nothing is pushed. This
-file is the source of truth for the app; change it before changing code.
+and snap add 11 tests (**310 total**); T19b-1 adds 14 (**324 total**); T19b-2
+adds 6 (**330 total**). All are on local `main`; the device smoke is Android 16
+only. The 0.2.0 release remains the published baseline and does not include these
+changes. Nothing is pushed. This file is the source of truth for the app; change
+it before changing code.
 
 ## Verification scope
 
@@ -502,11 +502,11 @@ the per-feature Diagnostics status table before the universality work.
 | T18 ✅ | Stop app | Tap-select a process/app row with a highlight and selection bar; Stop always confirms; Apps and Processes both supported (Processes says Stop app and warns the whole package stops; native protected); tiered `StopPolicy` — protected: self, Shizuku, native/no package, UID < 10000, core denylist, persistent, Native/System/Persistent/Persistent Service; warning: system/updated-system/privileged including AICore, foreground/visible, launcher, IME, GMS; normal: cached/background; `am force-stop <validated package>` through Shizuku AIDL version 5, no raw kill; one rescan after a stop; 280 tests; device-verified: AICore selected as `WARNING · On-device AI…`, confirmed `Stop AICore?`, `stopPackage … exit=0 reply=OK`, AICore pid gone, one rescan 266 rows, RAM 8.7G→7.1G, poll still running; protected `system` row showed a padlock + `PROTECTED · Core system process.` with no Stop; warning/protected bars show the package on its own line; Cancel restored the footer; Processes warning row showed the `Stop app` label; no crash; warning confirmation shows the full package + reason + `This stops every process of the app.` with no truncation |
 | T19a ✅ | Diagnostics feature status | "Feature status" table above the snapshot: eight rows (battery, thermal status, CPU/GPU, board, FPS, RAM, process memory, Stop app), each with state, source and exact reason; precedence demo → Shizuku installed/running/permission → overlay → probe/value; battery/thermal/RAM stay tier 0; FPS probe every poll and meminfo/stop last-attempt probes with `shellBlocked` recovery clearing; cancelled scans/stops get terminal states; no new permissions, dependencies or measurement behaviour; 299 tests; 160 independent acceptance checks; device-verified 2026-11-23 with caveats (Shizuku-down/recovery and the protected-stop UI path were not forced) |
 | T19b-1 ✅ | FPS parser portability | Accepts Android 8–14 plain `--list` lines and Android 15+ wrappers; hash/legacy/BLAST/`@0(BLAST)` names; `desiredPresentTime=0` rows; `AppWindowToken` focus. Hash-prefixed plain layers are skipped when an exact twin exists (Android 16 containers) and kept only as an Android 17 fallback. 324 tests; 56 independent acceptance checks; Android 16 smoke at 0/53/60/120 fps. Real Android 8–14/17 formats remain unverified. |
+| T19b-2 ✅ | Meminfo parser tolerance | Work-profile `(pid N) (user 10)`, `kB`/`KB`/`kb`, `/ activities` and `:remote` pid suffixes, case-insensitive `pid`/`user`; unclean headings become `Unknown` instead of inheriting the previous group; malformed `(pid` rows do not change the group. PSS/grouping/sort/page behavior unchanged. 330 tests; 25 independent acceptance checks; Android 16 smoke scanned 281 processes in Apps/Processes with a working pager. `ps`/RSS fallback and the PSS-vs-RSS label remain outstanding. |
 
-T0-T19a plus the record/snap/T19b-1 slices are complete in code. T17 is committed
-on `feat/process-ram`; T18 on `feat/stop-app`; T19a on `feat/t19a-diagnostics`;
-record and snap are in `main`; T19b-1 is on `feat/t19b-fps` and is not merged.
-Nothing is pushed.
+T0-T19a plus the record/snap/T19b-1/T19b-2 slices are complete in code on
+`main`. T17/T18/T19a are ancestors of `main` from their feature branches; record,
+snap and both T19b slices are merged. Nothing is pushed.
 
 ### T19a feature status (2026-11-23)
 

@@ -62,18 +62,41 @@ const val PROCESS_PAGE_SIZE = 8
 /** Heading that opens the section T17 reads; the RSS section above it is ignored. */
 private const val PSS_HEADER = "Total PSS by OOM adjustment:"
 
-/**
- * A group-total line such as `130,000K: Cached`. Group names are alphabetic
- * with optional spaces; a line carrying `(pid` is a process row, not a group.
- */
-private val GROUP_LINE = Regex("""^\s*[\d,]+K:\s*([A-Za-z][A-Za-z ]*)\s*$""")
+/** Group shown when a total line's caption is not a recognisable group name. */
+private const val UNKNOWN_GROUP = "Unknown"
 
 /**
- * A process row such as `52,345K: com.example.notes (pid 4100 / activities)`.
- * The parenthesised pid may carry a `/ activities` (or similar) suffix.
+ * A group-total line such as `130,000K: Cached` or `130,000kB: Foreground Service`.
+ *
+ * The unit is `K` with an optional `B` (any case). The caption is captured
+ * loosely because some real dumps carry junk captions; [CLEAN_GROUP] decides
+ * whether it names a group or becomes [UNKNOWN_GROUP].
+ */
+private val GROUP_LINE = Regex(
+  """^\s*[\d,]+\s*[kK][bB]?:\s*(.*?)\s*$""",
+)
+
+/**
+ * A caption that names a real OOM group: letters with spaces, `/` or `-`
+ * (`Foreground Service`, `Persistent Service`). Anything else (`Cached+foo`,
+ * an unclosed pid, an embedded dot) is not trusted as a heading.
+ */
+private val CLEAN_GROUP = Regex("""^[A-Za-z][A-Za-z /-]*$""")
+
+/**
+ * A process row such as `52,345K: com.example.notes (pid 4100 / activities)`,
+ * `52,345kB: com.example.notes (pid 4100) (user 10)` or
+ * `52,345K: com.example.notes:remote (pid 4101:remote)`.
+ *
+ * The unit is `K` with an optional `B` (any case). The pid parenthesis may end
+ * with a `/ activities` or `:remote` suffix, with or without surrounding
+ * spaces, and a work-profile row may add a trailing `(user N)`.
+ * `pid`/`user` are matched case-insensitively because vendor dumps vary.
  */
 private val PROCESS_LINE = Regex(
-  """^\s*([\d,]+)K:\s*(.+?)\s*\(pid\s+(\d+)(?:\s*/\s*[^)]*)?\)\s*$""",
+  """^\s*([\d,]+)\s*[kK][bB]?:\s*(.+?)\s*\(\s*pid\s+(\d+)(?:\s*[/:]\s*[^)]*)?\s*\)""" +
+    """(?:\s*\(\s*user\s+\d+\s*\))?\s*$""",
+  RegexOption.IGNORE_CASE,
 )
 
 /**
@@ -83,8 +106,11 @@ private val PROCESS_LINE = Regex(
  * Only that section is read: the earlier RSS section and anything after the
  * next `Total ...` section (for example `Total SwapPSS by OOM adjustment:`) are
  * ignored, so a caller may pass the whole dump. Each row inherits the most
- * recent group heading (`Cached`, `Native`, …). File order is preserved;
- * [sortProcesses] applies the display order.
+ * recent group heading (`Cached`, `Native`, …); a total line whose caption is
+ * not a clean group name (see [CLEAN_GROUP]) sets [UNKNOWN_GROUP] instead of
+ * keeping the previous group. A malformed row containing `(pid` never acts as a
+ * heading, so it cannot corrupt the group of the rows after it. File order is
+ * preserved; [sortProcesses] applies the display order.
  *
  * Malformed rows, blank names, group totals and dumps without the PSS header
  * yield no row rather than an error, because this runs on an untrusted shell
@@ -113,8 +139,13 @@ fun parseMeminfoPss(raw: String): List<ProcessMemory> {
       continue
     }
 
-    val heading = GROUP_LINE.find(line)
-    if (heading != null) group = heading.groupValues[1].trim()
+    // A row that mentions a pid but does not parse is a broken process row,
+    // not a heading; leaving the group alone keeps the following rows grouped.
+    if (line.contains("(pid", ignoreCase = true)) continue
+
+    val heading = GROUP_LINE.find(line) ?: continue
+    val caption = heading.groupValues[1].trim()
+    group = if (CLEAN_GROUP.matches(caption)) caption else UNKNOWN_GROUP
   }
 
   return result
