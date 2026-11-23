@@ -6,27 +6,41 @@ import java.util.Locale
  * Pure model and helpers for the T17 process-memory page (ANDROID.md §3, §9).
  *
  * The page reads a snapshot of `dumpsys meminfo --oom` and shows either every
- * process or apps grouped by base package. Nothing here touches Android: the
- * Shizuku runner supplies raw stdout and the overlay only renders the results,
- * which keeps the parsing and paging testable on the JVM.
+ * process or apps grouped by base package. When the dump yields no PSS rows the
+ * caller falls back to `ps -A -o PID,RSS,NAME`; the snapshot records which
+ * metric it actually holds so the page never calls RSS "PSS" (T19b-3). Nothing
+ * here touches Android: the Shizuku runner supplies raw stdout and the overlay
+ * only renders the results, which keeps parsing and paging testable on the JVM.
  *
  * Decimal units (1024 bytes per KiB, 1e6/1e9 for MB/GB) match [fmtRam] and
  * Android's own memory reporting; bytes are never binary GiB.
  */
 
-/** One process row parsed from the PSS section of `dumpsys meminfo --oom`. */
+/** The metric a [ProcessSnapshot] carries; the page footer shows its label. */
+enum class ProcessMetric(val label: String) {
+  PSS("PSS"),
+  RSS("RSS"),
+}
+
+/** One process row: PSS from meminfo or RSS from `ps`, always in KiB. */
 data class ProcessMemory(
   val name: String,
   val pid: Int,
-  val pssKb: Long,
+  val memoryKb: Long,
   val group: String,
 )
 
 /** One app row: all processes whose name is the package or package:something. */
 data class AppMemory(
   val packageName: String,
-  val pssKb: Long,
+  val memoryKb: Long,
   val processCount: Int,
+)
+
+/** Parsed rows plus the metric they were measured with. */
+data class ProcessSnapshot(
+  val rows: List<ProcessMemory>,
+  val metric: ProcessMetric,
 )
 
 /**
@@ -64,6 +78,19 @@ private const val PSS_HEADER = "Total PSS by OOM adjustment:"
 
 /** Group shown when a total line's caption is not a recognisable group name. */
 private const val UNKNOWN_GROUP = "Unknown"
+
+/**
+ * Group carried by `ps` rows. RSS has no OOM adjustment, so this deliberately
+ * is not `Native`/`System`: the Apps filter must keep those rows visible
+ * instead of hiding every native and system process (T19b-3).
+ */
+private const val RSS_GROUP = "RSS"
+
+/** Header tokens accepted for the `ps` name column, lower-case for lookup. */
+private val PS_NAME_HEADERS = setOf("name", "cmd", "command")
+
+/** `ps` pads columns with spaces; split on any run of whitespace. */
+private val PS_WHITESPACE = Regex("\\s+")
 
 /**
  * A group-total line such as `130,000K: Cached` or `130,000kB: Foreground Service`.
@@ -131,10 +158,10 @@ fun parseMeminfoPss(raw: String): List<ProcessMemory> {
     val process = PROCESS_LINE.find(line)
     if (process != null) {
       val name = process.groupValues[2].trim()
-      val pssKb = process.groupValues[1].replace(",", "").toLongOrNull()
+      val memoryKb = process.groupValues[1].replace(",", "").toLongOrNull()
       val pid = process.groupValues[3].toIntOrNull()
-      if (name.isNotEmpty() && pssKb != null && pid != null) {
-        result += ProcessMemory(name, pid, pssKb, group)
+      if (name.isNotEmpty() && memoryKb != null && pid != null) {
+        result += ProcessMemory(name, pid, memoryKb, group)
       }
       continue
     }
@@ -152,13 +179,90 @@ fun parseMeminfoPss(raw: String): List<ProcessMemory> {
 }
 
 /**
- * Display order for the Processes view: largest PSS first, then name and pid so
- * equal totals are deterministic. Returns a new list and leaves [processes]
+ * Parses the tabular output of `ps -A -o PID,RSS,NAME` (T19b-3).
+ *
+ * Columns are located from the first header line that contains `PID`, `RSS` and
+ * a name column (`NAME`, `CMD` or `COMMAND`), case-insensitively, so a vendor
+ * that reorders or adds columns still parses. Each later row is read at those
+ * positions. The name column takes the rest of the line joined by single
+ * spaces when it is last (a process name can contain spaces); otherwise it is
+ * exactly one token.
+ *
+ * Rows are kept only when the pid is positive, the RSS is a non-negative plain
+ * KiB integer and the name is non-empty. `ps` prints plain decimal integers, so
+ * thousands separators are malformed, not accepted. Every row gets
+ * [RSS_GROUP] because `ps` reports no OOM adjustment. A missing header or a
+ * malformed line yields no row rather than an error, because this runs on an
+ * untrusted shell dump.
+ */
+fun parsePsRss(raw: String): List<ProcessMemory> {
+  val result = mutableListOf<ProcessMemory>()
+  var headerSize = -1
+  var pidIndex = -1
+  var rssIndex = -1
+  var nameIndex = -1
+
+  for (line in raw.lineSequence()) {
+    if (line.isBlank()) continue
+    val tokens = line.trim().split(PS_WHITESPACE)
+
+    if (headerSize < 0) {
+      val pid = tokens.indexOfFirst { it.equals("PID", ignoreCase = true) }
+      val rss = tokens.indexOfFirst { it.equals("RSS", ignoreCase = true) }
+      val name = tokens.indexOfFirst { it.lowercase(Locale.ROOT) in PS_NAME_HEADERS }
+      if (pid >= 0 && rss >= 0 && name >= 0) {
+        headerSize = tokens.size
+        pidIndex = pid
+        rssIndex = rss
+        nameIndex = name
+      }
+      continue
+    }
+
+    if (tokens.size < headerSize) continue
+    val nameIsLast = nameIndex == headerSize - 1
+    if (!nameIsLast && tokens.size != headerSize) continue
+
+    val pid = tokens[pidIndex].toIntOrNull() ?: continue
+    if (pid <= 0) continue
+    val memoryKb = tokens[rssIndex].toLongOrNull() ?: continue
+    if (memoryKb < 0L) continue
+    val name = if (nameIsLast) {
+      tokens.subList(nameIndex, tokens.size).joinToString(" ")
+    } else {
+      tokens[nameIndex]
+    }
+    if (name.isEmpty()) continue
+    result += ProcessMemory(name, pid, memoryKb, RSS_GROUP)
+  }
+
+  return result
+}
+
+/**
+ * Chooses the process list for one scan (T19b-3).
+ *
+ * A non-empty PSS section wins, because meminfo is the richer route and its
+ * rows carry OOM groups. A `ps` dump is used only when meminfo produced no PSS
+ * rows; both shapes in one string still resolve to PSS. When neither parses,
+ * the caller gets an empty PSS snapshot and shows its existing no-data state.
+ */
+fun parseProcessSnapshot(raw: String): ProcessSnapshot {
+  val pss = parseMeminfoPss(raw)
+  if (pss.isNotEmpty()) return ProcessSnapshot(pss, ProcessMetric.PSS)
+  val rss = parsePsRss(raw)
+  if (rss.isNotEmpty()) return ProcessSnapshot(rss, ProcessMetric.RSS)
+  return ProcessSnapshot(emptyList(), ProcessMetric.PSS)
+}
+
+/**
+ * Display order for the Processes view: largest memory first, then name and pid
+ * so equal totals are deterministic. Returns a new list and leaves [processes]
  * untouched.
  */
 fun sortProcesses(processes: List<ProcessMemory>): List<ProcessMemory> =
   processes.sortedWith(
-    compareByDescending<ProcessMemory> { it.pssKb }
+    compareByDescending<ProcessMemory> { it.memoryKb }
       .thenBy { it.name }
       .thenBy { it.pid },
   )
@@ -171,8 +275,10 @@ private val HIDDEN_GROUPS = setOf("native", "system")
  * (case-insensitive).
  *
  * A process named `package` and its helpers `package:remote` collapse into one
- * [AppMemory] with the summed PSS and the process count. The result is a new
- * list sorted by total PSS descending, then package name.
+ * [AppMemory] with the summed memory and the process count. The result is a new
+ * list sorted by total memory descending, then package name. RSS rows carry the
+ * [RSS_GROUP] group, which is not hidden, so the fallback list is not emptied
+ * by the Apps filter.
  */
 fun groupApps(processes: List<ProcessMemory>): List<AppMemory> =
   processes
@@ -181,11 +287,11 @@ fun groupApps(processes: List<ProcessMemory>): List<AppMemory> =
     .map { (packageName, rows) ->
       AppMemory(
         packageName = packageName,
-        pssKb = rows.sumOf { it.pssKb },
+        memoryKb = rows.sumOf { it.memoryKb },
         processCount = rows.size,
       )
     }
-    .sortedWith(compareByDescending<AppMemory> { it.pssKb }.thenBy { it.packageName })
+    .sortedWith(compareByDescending<AppMemory> { it.memoryKb }.thenBy { it.packageName })
 
 /**
  * Slices [items] into a page.
@@ -217,14 +323,15 @@ private const val BYTES_PER_MB = 1_000_000.0
 private const val WHOLE_MEGABYTE_BYTES = 10_000_000.0
 
 /**
- * A row's PSS for the list, in decimal units: `1.2G`, `735M`, `0.5M`, `0.0M`.
+ * A row's PSS or RSS for the list, in decimal units: `1.2G`, `735M`, `0.5M`,
+ * `0.0M`.
  *
  * Negative input means the value is unavailable and renders as [DASH]. Input is
- * KiB from meminfo and is converted with 1024 bytes per KiB.
+ * KiB from meminfo or `ps` and is converted with 1024 bytes per KiB.
  */
-fun fmtProcessRam(pssKb: Long): String {
-  if (pssKb < 0L) return DASH
-  val bytes = pssKb * 1024.0
+fun fmtProcessRam(memoryKb: Long): String {
+  if (memoryKb < 0L) return DASH
+  val bytes = memoryKb * 1024.0
   return when {
     bytes >= BYTES_PER_GB -> String.format(Locale.ROOT, "%.1fG", bytes / BYTES_PER_GB)
     bytes >= WHOLE_MEGABYTE_BYTES -> String.format(Locale.ROOT, "%.0fM", bytes / BYTES_PER_MB)

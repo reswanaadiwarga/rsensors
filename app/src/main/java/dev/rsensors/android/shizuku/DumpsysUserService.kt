@@ -10,6 +10,7 @@ import dev.rsensors.android.core.measureFps
 import dev.rsensors.android.core.parseCandidateLayers
 import dev.rsensors.android.core.parseFocusedComponent
 import dev.rsensors.android.core.parseLatencyRows
+import dev.rsensors.android.core.parseMeminfoPss
 import java.io.IOException
 
 /**
@@ -24,8 +25,10 @@ import java.io.IOException
  * `dumpsys SurfaceFlinger --list/--latency`, returning the one-line reply the
  * app parses with [dev.rsensors.android.core.parseFpsReply]. [runMeminfo] runs
  * `dumpsys meminfo --oom` and returns its raw stdout for the T17 process page
- * ([dev.rsensors.android.core.parseMeminfoPss]); [stopPackage] runs
- * `am force-stop <package>` for the T18 stop action.
+ * ([dev.rsensors.android.core.parseMeminfoPss]); when that dump yields no PSS
+ * rows it falls back to `ps -A -o PID,RSS,NAME` so the page still has data
+ * (T19b-3); [stopPackage] runs `am force-stop <package>` for the T18 stop
+ * action.
  *
  * `dumpsys` is invoked by absolute path because a UserService process does not
  * inherit the app's PATH; relying on a bare `dumpsys` was a silent
@@ -119,26 +122,45 @@ class DumpsysUserService : IDumpsysService.Stub {
   }
 
   /**
-   * Returns the raw `dumpsys meminfo --oom` dump for the T17 process page.
+   * Returns one raw process-memory dump for the T17 process page.
    *
-   * Uses the shared [runDumpsys] helper so process execution and the
-   * read-to-EOF-before-wait ordering live in one place. The dump takes ~2 s on
-   * the target, which is why the app requests it on page open and on Refresh
-   * rather than from the 2 s poll.
+   * The preferred route is `dumpsys meminfo --oom`, which carries PSS and OOM
+   * groups. A dump that parses to no PSS rows means this device/vendor cannot
+   * produce that section, so the method falls back to
+   * `ps -A -o PID,RSS,NAME`; the app's parser labels the resulting snapshot RSS
+   * instead of pretending it is PSS (T19b-3). A meminfo failure also falls
+   * through to `ps`.
    *
-   * @return stdout verbatim; the pure parser trims and splits it
-   * @throws java.io.IOException when the process cannot start or be read, or
-   *   exits non-zero
+   * The dump takes ~2 s on the target, which is why the app requests it on page
+   * open and on Refresh rather than from the 2 s poll.
+   *
+   * @return the meminfo or `ps` stdout verbatim; the pure parser trims and
+   *   splits it
+   * @throws java.io.IOException when neither route produces usable output
    */
   override fun runMeminfo(): String {
     Log.i(TAG, "runMeminfo start")
-    return try {
+    try {
       val output = runDumpsys("meminfo", "--oom")
-      Log.i(TAG, "runMeminfo end chars=${output.length}")
-      output
+      if (parseMeminfoPss(output).isNotEmpty()) {
+        Log.i(TAG, "runMeminfo end route=meminfo chars=${output.length}")
+        return output
+      }
+      Log.i(TAG, "runMeminfo meminfo had no PSS rows chars=${output.length}; trying ps")
     } catch (e: Exception) {
-      Log.w(TAG, "runMeminfo failed", e)
-      throw e
+      Log.w(TAG, "runMeminfo meminfo failed; trying ps", e)
+    }
+
+    try {
+      val output = runPs()
+      if (output.isNotEmpty()) {
+        Log.i(TAG, "runMeminfo end route=ps chars=${output.length}")
+        return output
+      }
+      throw IOException("ps returned no output")
+    } catch (e: Exception) {
+      Log.w(TAG, "runMeminfo ps failed", e)
+      throw IOException("No process memory from meminfo or ps", e)
     }
   }
 
@@ -260,6 +282,24 @@ class DumpsysUserService : IDumpsysService.Stub {
     return output
   }
 
+  /**
+   * Runs `ps -A -o PID,RSS,NAME` and returns stdout (T19b-3).
+   *
+   * Uses the absolute [PS] path for the same PATH reason as [DUMPSYS], and an
+   * argv array so nothing parses a shell string. Reads to EOF before waiting:
+   * the process table can exceed a pipe buffer, so waitFor-first would deadlock
+   * on a full pipe.
+   *
+   * @throws IOException when the process cannot start or exits non-zero
+   */
+  private fun runPs(): String {
+    val process = ProcessBuilder(PS, "-A", "-o", "PID,RSS,NAME").start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    val exit = process.waitFor()
+    if (exit != 0) throw IOException("ps exit=$exit")
+    return output
+  }
+
   /** One line, bounded, so the app-side reply parser never sees a stack trace. */
   private fun shortReason(error: Exception): String =
     (error.message ?: error.javaClass.simpleName)
@@ -284,6 +324,9 @@ class DumpsysUserService : IDumpsysService.Stub {
 
     /** Absolute for the same reason as [DUMPSYS]; runs the stop command. */
     private const val AM = "/system/bin/am"
+
+    /** Absolute for the same reason as [DUMPSYS]; the RSS fallback route. */
+    private const val PS = "/system/bin/ps"
 
     /** Longest package name Android accepts; anything longer is rejected. */
     private const val MAX_PACKAGE_LENGTH = 255

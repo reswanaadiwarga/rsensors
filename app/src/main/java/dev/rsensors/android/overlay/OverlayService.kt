@@ -23,7 +23,8 @@ import androidx.core.content.ContextCompat
 import dev.rsensors.android.core.CapabilityState
 import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.ProbeStatus
-import dev.rsensors.android.core.ProcessMemory
+import dev.rsensors.android.core.ProcessMetric
+import dev.rsensors.android.core.ProcessSnapshot
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.ReadingHistory
 import dev.rsensors.android.core.RamUsage
@@ -34,7 +35,7 @@ import dev.rsensors.android.core.VisibilityKind
 import dev.rsensors.android.core.fmtFps
 import dev.rsensors.android.core.iconSpec
 import dev.rsensors.android.core.parseFpsReply
-import dev.rsensors.android.core.parseMeminfoPss
+import dev.rsensors.android.core.parseProcessSnapshot
 import dev.rsensors.android.core.stopDecision
 import dev.rsensors.android.core.stripSegments
 import dev.rsensors.android.source.BatterySource
@@ -119,7 +120,9 @@ import rikka.shizuku.Shizuku
  *
  * T17 adds the RAM row's process page. Its `dumpsys meminfo --oom` scan runs on
  * a second [HandlerThread] (`rsensors-meminfo`) so a ~2 s dump never delays the
- * 2 s poll; one scan starts when the page opens and one per Refresh. Every
+ * 2 s poll; one scan starts when the page opens and one per Refresh. T19b-3
+ * falls back to `ps -A -o PID,RSS,NAME` when meminfo yields no PSS rows and
+ * carries the resulting PSS/RSS metric into the page footer. Every
  * result carries a generation and is dropped when the page closed, a newer scan
  * started or the screen went off. The poll keeps feeding the page's summary and
  * age through `setReading`, so the pill, notification and recording continue
@@ -202,9 +205,10 @@ class OverlayService : Service() {
   private var fpsRunner: FpsRunner? = null
 
   /**
-   * Meminfo path for the T17 process page, sharing the same Shizuku UserService
-   * binding as the thermal dump; null in demo mode. Written when the source is
-   * built on the worker and read on the meminfo thread, hence volatile.
+   * Process-memory path for the T17 page (meminfo with a `ps` fallback), sharing
+   * the same Shizuku UserService binding as the thermal dump; null in demo mode.
+   * Written when the source is built on the worker and read on the meminfo
+   * thread, hence volatile.
    */
   @Volatile private var meminfoRunner: MeminfoRunner? = null
 
@@ -217,8 +221,8 @@ class OverlayService : Service() {
   @Volatile private var stopRunner: StopRunner? = null
 
   /**
-   * The process page's own thread: `dumpsys meminfo --oom` takes ~2 s and must
-   * never ride the 2 s thermal poll (ANDROID.md §9, §8 T17).
+   * The process page's own thread: the meminfo/`ps` scan takes ~2 s and must
+   * never ride the 2 s thermal poll (ANDROID.md §9, §8 T17, T19b-3).
    */
   private var meminfoThread: HandlerThread? = null
   private var meminfoHandler: Handler? = null
@@ -242,10 +246,12 @@ class OverlayService : Service() {
   private var stopGeneration = 0
 
   /**
-   * Last successful snapshot, restored when a scan is cancelled before it
-   * returns so the page never stays on `Scanning processes…`. Main thread.
+   * Last successful snapshot and its capture time, restored when a scan is
+   * cancelled before it returns so the page never stays on
+   * `Scanning processes…`. The snapshot carries the PSS/RSS metric so a restored
+   * list keeps its correct footer label. Main thread.
    */
-  private var lastProcessSnapshot: Pair<List<ProcessMemory>, Long>? = null
+  private var lastProcessSnapshot: Pair<ProcessSnapshot, Long>? = null
 
   /** The current chain, kept for its per-source exception log. Worker-only. */
   private var chain: SourceChain? = null
@@ -517,14 +523,15 @@ class OverlayService : Service() {
       DiagnosticsStore.meminfo = ProbeStatus(
         CapabilityState.UNAVAILABLE,
         "Process scanner unavailable",
-        SOURCE_MEMINFO,
+        meminfoSource(null),
       )
       view?.setProcessPageError("Process scanner unavailable")
       return
     }
 
     processScanInFlight = true
-    DiagnosticsStore.meminfo = ProbeStatus(CapabilityState.UNKNOWN, SCAN_MESSAGE, SOURCE_MEMINFO)
+    DiagnosticsStore.meminfo =
+      ProbeStatus(CapabilityState.UNKNOWN, SCAN_MESSAGE, meminfoSource(null))
     view?.setProcessPageLoading(message)
     Log.i(TAG, "meminfo scan start")
     handler.post {
@@ -538,13 +545,13 @@ class OverlayService : Service() {
         mainHandler.post { finishProcessScan(generation, null, "Couldn't read process memory") }
         return@post
       }
-      val processes = parseMeminfoPss(raw)
-      if (processes.isEmpty()) {
+      val snapshot = parseProcessSnapshot(raw)
+      if (snapshot.rows.isEmpty()) {
         mainHandler.post { finishProcessScan(generation, null, "No process data") }
         return@post
       }
       val capturedAt = System.currentTimeMillis()
-      mainHandler.post { finishProcessScan(generation, processes to capturedAt, null) }
+      mainHandler.post { finishProcessScan(generation, snapshot to capturedAt, null) }
     }
   }
 
@@ -556,7 +563,7 @@ class OverlayService : Service() {
    */
   private fun finishProcessScan(
     generation: Int,
-    snapshot: Pair<List<ProcessMemory>, Long>?,
+    snapshot: Pair<ProcessSnapshot, Long>?,
     error: String?,
   ) {
     if (!processPageOpen || generation != processScanGeneration) {
@@ -566,20 +573,41 @@ class OverlayService : Service() {
     processScanInFlight = false
     if (snapshot != null) {
       lastProcessSnapshot = snapshot
+      val processes = snapshot.first.rows
       DiagnosticsStore.meminfo = ProbeStatus(
         CapabilityState.OK,
-        "${snapshot.first.size} processes",
-        SOURCE_MEMINFO,
+        "${processes.size} processes (${snapshot.first.metric.label})",
+        meminfoSource(snapshot.first.metric),
       )
-      view?.setProcessPageData(snapshot.first, snapshot.second)
-      Log.i(TAG, "meminfo scan end rows=${snapshot.first.size}")
+      view?.setProcessPageData(processes, snapshot.second, snapshot.first.metric)
+      Log.i(
+        TAG,
+        "meminfo scan end rows=${processes.size} metric=${snapshot.first.metric.label}",
+      )
     } else {
       val reason = error ?: "Couldn't read process memory"
-      DiagnosticsStore.meminfo = ProbeStatus(CapabilityState.UNAVAILABLE, reason, SOURCE_MEMINFO)
+      DiagnosticsStore.meminfo =
+        ProbeStatus(CapabilityState.UNAVAILABLE, reason, meminfoSource(null))
       view?.setProcessPageError(reason)
       Log.w(TAG, "meminfo scan failure: $reason")
     }
   }
+
+  /**
+   * Probe source for a snapshot's metric (T19b-3).
+   *
+   * Diagnostics names the command that produced the rows, so an RSS snapshot
+   * from the `ps` fallback is never reported as `dumpsys meminfo`. A null
+   * metric means no snapshot backs the probe (scanning, failed, or cancelled
+   * before the first result), so the source stays neutral instead of naming a
+   * command that may not have run.
+   */
+  private fun meminfoSource(metric: ProcessMetric?): String =
+    when (metric) {
+      ProcessMetric.PSS -> SOURCE_MEMINFO
+      ProcessMetric.RSS -> SOURCE_PS
+      null -> SOURCE_PROCESS
+    }
 
   /**
    * Invalidates a scan in flight and leaves the page in a stable state.
@@ -589,7 +617,8 @@ class OverlayService : Service() {
    * age shows how old it is) or to a retryable error. Screen off calls this so
    * waking the phone never finds a permanent `Scanning processes…`. The probe
    * gets the matching terminal state so the feature table cannot stay in flight
-   * either (T19).
+   * either (T19); when a snapshot is restored the probe names its metric and
+   * source instead of assuming `dumpsys meminfo` (T19b-3).
    */
   private fun cancelProcessScan() {
     processScanGeneration += 1
@@ -600,15 +629,15 @@ class OverlayService : Service() {
     if (snapshot != null) {
       DiagnosticsStore.meminfo = ProbeStatus(
         CapabilityState.DEGRADED,
-        "Scan cancelled; showing the previous result.",
-        SOURCE_MEMINFO,
+        "Scan cancelled; showing the previous result (${snapshot.first.metric.label}).",
+        meminfoSource(snapshot.first.metric),
       )
-      view?.setProcessPageData(snapshot.first, snapshot.second)
+      view?.setProcessPageData(snapshot.first.rows, snapshot.second, snapshot.first.metric)
     } else {
       DiagnosticsStore.meminfo = ProbeStatus(
         CapabilityState.UNAVAILABLE,
         "Scan cancelled.",
-        SOURCE_MEMINFO,
+        meminfoSource(null),
       )
       view?.setProcessPageError("Scan cancelled")
     }
@@ -819,10 +848,13 @@ class OverlayService : Service() {
       stopGeneration += 1
       stopInFlight = false
       if (scanWasInFlight) {
+        // The probe names the source of the rows the page is restoring, when
+        // there is one; a cancelled first scan has no snapshot to describe.
+        val snapshot = lastProcessSnapshot
         DiagnosticsStore.meminfo = ProbeStatus(
           CapabilityState.UNKNOWN,
           "Scan cancelled \u2014 the process page closed.",
-          SOURCE_MEMINFO,
+          meminfoSource(snapshot?.first?.metric),
         )
       }
       if (stopWasInFlight) {
@@ -1373,6 +1405,8 @@ class OverlayService : Service() {
     /** Probe sources shown in Diagnostics (T19). */
     private const val SOURCE_FPS = "SurfaceFlinger"
     private const val SOURCE_MEMINFO = "dumpsys meminfo"
+    private const val SOURCE_PS = "ps"
+    private const val SOURCE_PROCESS = "process memory"
     private const val SOURCE_STOP = "am force-stop"
 
     const val ACTION_START = "dev.rsensors.android.overlay.START"

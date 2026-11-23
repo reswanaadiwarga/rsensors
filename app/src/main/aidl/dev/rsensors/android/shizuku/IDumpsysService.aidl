@@ -5,8 +5,9 @@
 // uses Shizuku's reserved transaction id so the server can recycle a stale
 // instance by version. `runDumpsys` returns the thermal dump; `runFps` returns
 // one `OK fps=…` / `ERR …` line for the foreground SurfaceFlinger layer
-// (ANDROID.md §8 T14); `runMeminfo` returns the raw `dumpsys meminfo --oom`
-// stdout for the process page (version 4, ANDROID.md §8 T17). `stopPackage`
+// (ANDROID.md §8 T14); `runMeminfo` returns `dumpsys meminfo --oom` stdout for
+// the process page, or `ps -A -o PID,RSS,NAME` stdout when the dump has no PSS
+// rows or fails (version 4, ANDROID.md §8 T17, T19b-3). `stopPackage`
 // runs `am force-stop` for one already-validated package and returns `OK` or
 // `ERR …` (ANDROID.md §8 T18); adding it bumps the UserService registration to
 // version 5.

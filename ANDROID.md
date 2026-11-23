@@ -4,17 +4,17 @@ Development design and task log. Public overview: [README.md](README.md);
 architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
-Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser and
-T19b-2 meminfo parser, complete in code.** The RAM pill, process-memory page and
-Stop app are committed on `feat/stop-app` (T17 is on the parent
-`feat/process-ram`) and installed/device-verified on the target (**280 tests** at
-T18). T19a adds the Diagnostics feature-status table (**299 tests**, 160
-independent acceptance checks; device-verified 2026-11-23 with caveats). Record
-and snap add 11 tests (**310 total**); T19b-1 adds 14 (**324 total**); T19b-2
-adds 6 (**330 total**). All are on local `main`; the device smoke is Android 16
-only. The 0.2.0 release remains the published baseline and does not include these
-changes. Nothing is pushed. This file is the source of truth for the app; change
-it before changing code.
+Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
+T19b-2 meminfo parser and T19b-3 RSS fallback, complete in code.** The RAM pill,
+process-memory page and Stop app are committed on `feat/stop-app` (T17 is on the
+parent `feat/process-ram`) and installed/device-verified on the target (**280
+tests** at T18). T19a adds the Diagnostics feature-status table (**299 tests**,
+160 independent acceptance checks; device-verified 2026-11-23 with caveats).
+Record and snap add 11 tests (**310 total**); T19b-1 adds 14 (**324 total**);
+T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**). All are on local
+`main`; the device smoke is Android 16 only. The 0.2.0 release remains the
+published baseline and does not include these changes. Nothing is pushed. This
+file is the source of truth for the app; change it before changing code.
 
 ## Verification scope
 
@@ -136,11 +136,14 @@ nice-to-haves:
   sensors); show `per-core n/a` instead of an empty section.
 - **Process memory** (expanded card → RAM row): the RAM row is a button with a
   `›`; it opens a second page in the same overlay. The page lists the top
-  processes by PSS from `dumpsys meminfo --oom`, eight per page, with an
-  `Apps` / `Processes` toggle: `Apps` groups by package and hides the
-  `Native`/`System` OOM groups, `Processes` shows every row. The header has
-  `Back` and `Refresh`; the summary keeps the card's system `used / total` and
-  the footer shows `PSS · N apps/processes · age` and `‹ 1–8 of N ›`. The dump
+  processes by PSS from `dumpsys meminfo --oom`, falling back to RSS from
+  `ps -A -o PID,RSS,NAME` when that dump has no PSS rows, eight per page, with
+  an `Apps` / `Processes` toggle: `Apps` groups by package and hides the
+  `Native`/`System` OOM groups on the PSS route (RSS rows carry no OOM group, so
+  those system/native rows stay visible), `Processes` shows every row. The
+  header has `Back` and `Refresh`; the summary keeps the card's system
+  `used / total` and the footer shows `PSS · N apps/processes · age` or
+  `RSS · …` matching the metric actually shown, plus `‹ 1–8 of N ›`. The dump
   is a snapshot taken when the page opens and on Refresh (~2 s), never part of
   the 2 s/5 s poll; the pill keeps updating behind it. The card grows to 280 dp
   and returns to 220 dp on Back. No new permissions. Without Shizuku, or in
@@ -432,9 +435,10 @@ Test layers:
   list/read on a temp directory; the graph interaction is on-device/manual.
 - **Process memory**: a trimmed `dumpsys meminfo --oom` fixture; parser
   handling of comma thousands and `/ activities` suffixes, Apps grouping and
-  Native/System exclusion, paging, and formatting. Manual: compare the top rows
-  with `adb shell dumpsys meminfo --oom` and confirm the scan does not stall the
-  pill's 2 s poll.
+  Native/System exclusion, paging, formatting, the `ps` RSS parser with its
+  header-position mapping, and PSS-vs-RSS snapshot routing. Manual: compare the
+  top rows with `adb shell dumpsys meminfo --oom` and confirm the scan does not
+  stall the pill's 2 s poll.
 - **Stop policy**: JVM tests for every tier and honouring package, UID, system/
   updated-system/persistent flags, OOM group, launcher/IME, self and Shizuku;
   AICore is a warning, not a block. Manual: select each tier, confirm the
@@ -502,11 +506,12 @@ the per-feature Diagnostics status table before the universality work.
 | T18 ✅ | Stop app | Tap-select a process/app row with a highlight and selection bar; Stop always confirms; Apps and Processes both supported (Processes says Stop app and warns the whole package stops; native protected); tiered `StopPolicy` — protected: self, Shizuku, native/no package, UID < 10000, core denylist, persistent, Native/System/Persistent/Persistent Service; warning: system/updated-system/privileged including AICore, foreground/visible, launcher, IME, GMS; normal: cached/background; `am force-stop <validated package>` through Shizuku AIDL version 5, no raw kill; one rescan after a stop; 280 tests; device-verified: AICore selected as `WARNING · On-device AI…`, confirmed `Stop AICore?`, `stopPackage … exit=0 reply=OK`, AICore pid gone, one rescan 266 rows, RAM 8.7G→7.1G, poll still running; protected `system` row showed a padlock + `PROTECTED · Core system process.` with no Stop; warning/protected bars show the package on its own line; Cancel restored the footer; Processes warning row showed the `Stop app` label; no crash; warning confirmation shows the full package + reason + `This stops every process of the app.` with no truncation |
 | T19a ✅ | Diagnostics feature status | "Feature status" table above the snapshot: eight rows (battery, thermal status, CPU/GPU, board, FPS, RAM, process memory, Stop app), each with state, source and exact reason; precedence demo → Shizuku installed/running/permission → overlay → probe/value; battery/thermal/RAM stay tier 0; FPS probe every poll and meminfo/stop last-attempt probes with `shellBlocked` recovery clearing; cancelled scans/stops get terminal states; no new permissions, dependencies or measurement behaviour; 299 tests; 160 independent acceptance checks; device-verified 2026-11-23 with caveats (Shizuku-down/recovery and the protected-stop UI path were not forced) |
 | T19b-1 ✅ | FPS parser portability | Accepts Android 8–14 plain `--list` lines and Android 15+ wrappers; hash/legacy/BLAST/`@0(BLAST)` names; `desiredPresentTime=0` rows; `AppWindowToken` focus. Hash-prefixed plain layers are skipped when an exact twin exists (Android 16 containers) and kept only as an Android 17 fallback. 324 tests; 56 independent acceptance checks; Android 16 smoke at 0/53/60/120 fps. Real Android 8–14/17 formats remain unverified. |
-| T19b-2 ✅ | Meminfo parser tolerance | Work-profile `(pid N) (user 10)`, `kB`/`KB`/`kb`, `/ activities` and `:remote` pid suffixes, case-insensitive `pid`/`user`; unclean headings become `Unknown` instead of inheriting the previous group; malformed `(pid` rows do not change the group. PSS/grouping/sort/page behavior unchanged. 330 tests; 25 independent acceptance checks; Android 16 smoke scanned 281 processes in Apps/Processes with a working pager. `ps`/RSS fallback and the PSS-vs-RSS label remain outstanding. |
+| T19b-2 ✅ | Meminfo parser tolerance | Work-profile `(pid N) (user 10)`, `kB`/`KB`/`kb`, `/ activities` and `:remote` pid suffixes, case-insensitive `pid`/`user`; unclean headings become `Unknown` instead of inheriting the previous group; malformed `(pid` rows do not change the group. PSS/grouping/sort/page behavior unchanged. 330 tests; 25 independent acceptance checks; Android 16 smoke scanned 281 processes in Apps/Processes with a working pager. The `ps`/RSS fallback and the PSS-vs-RSS label are delivered by T19b-3 below. |
+| T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only; the production Shizuku UserService is currently blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE, so the normal-transport `ps` fallback is not device-verified. |
 
-T0-T19a plus the record/snap/T19b-1/T19b-2 slices are complete in code on
+T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3 slices are complete in code on
 `main`. T17/T18/T19a are ancestors of `main` from their feature branches; record,
-snap and both T19b slices are merged. Nothing is pushed.
+snap and all three T19b slices are merged. Nothing is pushed.
 
 ### T19a feature status (2026-11-23)
 
@@ -515,9 +520,9 @@ measurement or action the app can show, not one source: battery temperature,
 thermal status, CPU/GPU temperature, board sensors, FPS, system RAM, process
 memory and Stop app. The row carries `OK`, `DEGRADED`, `UNAVAILABLE`, `BLOCKED`
 or `UNKNOWN`, the source (`BatteryManager`, `PowerManager`, `dumpsys
-thermalservice`, `SurfaceFlinger`, `dumpsys meminfo`, `am force-stop`,
-`ActivityManager`), and the exact reason when it is not working. The Copy report
-contains the same rows.
+thermalservice`, `SurfaceFlinger`, `dumpsys meminfo`/`ps`/`process memory`,
+`am force-stop`, `ActivityManager`), and the exact reason when it is not
+working. The Copy report contains the same rows.
 
 The decision is pure (`core/Capabilities.kt`): demo, then Shizuku
 installed/running/permission, then overlay running, then the feature probe or
@@ -532,7 +537,10 @@ shell prerequisite is marked `shellBlocked`; when Shizuku recovers, only those
 probes are cleared, and the table ignores a shell-blocked probe once the gates
 pass, so a stale "needs Shizuku" reason cannot outlive the failure. Cancelling a
 scan (screen off, page close) or closing the page during a stop writes a terminal
-probe instead of leaving `Scanning…`/`Stopping…` forever.
+probe instead of leaving `Scanning…`/`Stopping…` forever. The process-memory
+probe names the source of the rows it reports or restores — `dumpsys meminfo` for
+PSS, `ps` for the RSS fallback — and a successful or restored detail carries
+that metric.
 A protected stop is `DEGRADED` ("Last attempt blocked: `<pkg>` is protected."),
 not a global Stop failure. The store is cleared on service create and after the
 worker's final poll on teardown.
@@ -553,11 +561,14 @@ Measured on the target as the shell UID (the UID a Shizuku UserService gets):
 | `dumpsys activity processes` | Process list with `lastPss`, but cached and sometimes `0.00` or 18 min old | ~0.2 s |
 | `cat /proc/<pid>/smaps_rollup` | `Permission denied`, even to shell | — |
 
-The PSS section is the source for T17. `dumpsys meminfo --oom` cannot ride the
-2 s poll; the page takes one snapshot on open and on Refresh. The `Apps` view
-excludes the `Native` and `System` OOM groups (on the target the top native
-process is the ~810 MB neural-networks shim); `Processes` shows every parsed
-row. The card's `used / total` remains `MemoryInfo`; the list is PSS, so the two
+The PSS section is the source for T17. If a device cannot produce it, T19b-3
+falls back to `ps -A -o PID,RSS,NAME` and the page labels the list RSS instead
+of mislabelling it PSS. `dumpsys meminfo --oom` cannot ride the 2 s poll; the
+page takes one snapshot on open and on Refresh. The `Apps` view excludes the
+`Native` and `System` OOM groups (on the target the top native process is the
+~810 MB neural-networks shim); `Processes` shows every parsed row. RSS rows have
+no OOM group, so `Apps` keeps the system/native rows it cannot classify. The
+card's `used / total` remains `MemoryInfo`; the list is PSS or RSS, so the two
 figures are related but not identical.
 
 ### T14 FPS probe and algorithm (2026-11-22)
@@ -729,10 +740,12 @@ Defaults are chosen; change them now, not during implementation.
   bar, without touching the poll, strip, recording, diagnostics or notification.
   The bar is decorative for accessibility; the card description carries
   `RAM 4.5 / 7.8 GB` or `RAM not available`.
-- Process memory page (T17): the RAM row is the entry point. The list is a
-  snapshot of the `Total PSS by OOM adjustment` section of
-  `dumpsys meminfo --oom`, parsed by `core/ProcessMemory.kt`. One scan runs when
-  the page opens and one per `Refresh` (~2.1 s), on a second HandlerThread so
+- Process memory page (T17/T19b-3): the RAM row is the entry point. The list is
+  a snapshot of the `Total PSS by OOM adjustment` section of
+  `dumpsys meminfo --oom`, parsed by `core/ProcessMemory.kt`; when that section
+  is empty the shell runner falls back to `ps -A -o PID,RSS,NAME` and the page
+  labels the rows RSS. One scan runs when the page opens and one per `Refresh`
+  (~2.1 s), on a second HandlerThread so
   the 2 s thermal/FPS poll is never blocked. The page shows eight rows; `Apps`
   groups by base package and hides the `Native`/`System` OOM groups,
   `Processes` shows every parsed row. The toggle and pager are view-local and
@@ -740,7 +753,9 @@ Defaults are chosen; change them now, not during implementation.
   expanded; the page itself uses 280 dp. No row detail, icons, auto-refresh or
   full-screen list in v1. The page never invents data: no Shizuku, demo mode or
   a parse failure shows an unavailable/error state. The card's `used / total`
-  is `MemoryInfo`; the rows are PSS, so the footer labels the list `PSS`.
+  is `MemoryInfo`; the rows are PSS or RSS, so the footer labels the metric
+  actually shown. RSS rows carry group `RSS`, not an OOM adjustment, so `Apps`
+  keeps system/native rows it cannot classify.
 - The telemetry header steps its text size down with the available width:
   14 sp collapsed, 10 sp in the 220 dp card and 12 sp on the 280 dp page. At
   14 sp the four metrics plus the source dot overflowed the card/page and
@@ -755,9 +770,10 @@ Defaults are chosen; change them now, not during implementation.
   no automatic scan on wake.
 - The AIDL adds `runMeminfo() = 3` and bumps the UserService registration to
   `version(4)` so a stale v3 shell process cannot answer the new transaction.
-  The UserService runs `/system/bin/dumpsys meminfo --oom` and returns stdout;
-  the parser is pure and fixture-tested. The runner forgets the binding on any
-  failure, like `runDumpsys`/`runFps`.
+  The UserService runs `/system/bin/dumpsys meminfo --oom` and returns stdout,
+  falling back to `/system/bin/ps -A -o PID,RSS,NAME` when the dump has no PSS
+  rows; the parser is pure and fixture-tested. The runner forgets the binding on
+  any failure, like `runDumpsys`/`runFps`.
 - Stop app (T18): "important" means needed for the phone or the tool, not large
   or system. PROTECTED: self, Shizuku, native/no package, UID < 10000, core
   denylist (`android`, `com.android.systemui`, `com.android.phone`,

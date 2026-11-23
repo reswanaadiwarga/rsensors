@@ -8,8 +8,9 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Process-memory page logic for T17 (ANDROID.md §3, §7, §9): parser, grouping,
- * sorting, paging and formatting.
+ * Process-memory page logic for T17/T19b-3 (ANDROID.md §3, §7, §9): the PSS and
+ * `ps` RSS parsers, snapshot metric selection, grouping, sorting, paging and
+ * formatting.
  *
  * Expected values are hand-derived from the trimmed `dumpsys meminfo --oom`
  * fixture and from the task spec's examples, never copied from the parser's
@@ -226,6 +227,225 @@ class ProcessMemoryTest {
       listOf(ProcessMemory("com.example.ok", 10, 1_000L, "Cached")),
       parseMeminfoPss(raw),
     )
+  }
+
+  @Test
+  fun `ps rows parse from a PID RSS NAME header with the RSS group`() {
+    val raw = """
+      PID   RSS NAME
+        1  1234 init
+     4100 52345 com.example.notes
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("init", 1, 1_234L, "RSS"),
+        ProcessMemory("com.example.notes", 4100, 52_345L, "RSS"),
+      ),
+      parsePsRss(raw),
+    )
+  }
+
+  @Test
+  fun `ps accepts CMD and COMMAND as the name column`() {
+    val cmd = """
+      PID RSS CMD
+       10 2048 com.example.one
+    """.trimIndent()
+    val command = """
+      PID RSS COMMAND
+       11 4096 com.example.two
+    """.trimIndent()
+
+    assertEquals(
+      listOf(ProcessMemory("com.example.one", 10, 2_048L, "RSS")),
+      parsePsRss(cmd),
+    )
+    assertEquals(
+      listOf(ProcessMemory("com.example.two", 11, 4_096L, "RSS")),
+      parsePsRss(command),
+    )
+  }
+
+  @Test
+  fun `ps maps columns by header position instead of a fixed order`() {
+    val reordered = """
+      NAME RSS PID
+      com.example.notes 52345 4100
+    """.trimIndent()
+    val extraColumn = """
+      USER PID RSS NAME
+      u0_10 10 1024 com.example.one
+    """.trimIndent()
+
+    assertEquals(
+      listOf(ProcessMemory("com.example.notes", 4100, 52_345L, "RSS")),
+      parsePsRss(reordered),
+    )
+    assertEquals(
+      listOf(ProcessMemory("com.example.one", 10, 1_024L, "RSS")),
+      parsePsRss(extraColumn),
+    )
+  }
+
+  @Test
+  fun `ps skips malformed and out-of-range rows`() {
+    val raw = """
+      PID RSS NAME
+        0 100 zero-pid
+       -1 100 negative-pid
+       12 -5 negative-rss
+      abc 100 nonnumeric-pid
+       13 100
+       14 x nonnumeric-rss
+       15 100 valid
+    """.trimIndent()
+
+    assertEquals(
+      listOf(ProcessMemory("valid", 15, 100L, "RSS")),
+      parsePsRss(raw),
+    )
+  }
+
+  @Test
+  fun `ps joins the trailing NAME column when it contains spaces`() {
+    val raw = """
+      PID RSS NAME
+      100 2048 com.example with space
+    """.trimIndent()
+
+    assertEquals(
+      listOf(ProcessMemory("com.example with space", 100, 2_048L, "RSS")),
+      parsePsRss(raw),
+    )
+  }
+
+  @Test
+  fun `ps keeps zero-RSS kernel threads`() {
+    // Real `ps` on the target lists 779 zero-RSS kernel threads; dropping them
+    // would make the fallback list silently incomplete (T19b-3).
+    val raw = """
+      PID RSS NAME
+        1 0 init
+      123 0 [kworker/0:0]
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        ProcessMemory("init", 1, 0L, "RSS"),
+        ProcessMemory("[kworker/0:0]", 123, 0L, "RSS"),
+      ),
+      parsePsRss(raw),
+    )
+  }
+
+  @Test
+  fun `ps treats a comma in RSS as malformed because ps prints plain digits`() {
+    val raw = """
+      PID RSS NAME
+       16 1,234 comma
+       17 2345 plain
+    """.trimIndent()
+
+    assertEquals(
+      listOf(ProcessMemory("plain", 17, 2_345L, "RSS")),
+      parsePsRss(raw),
+    )
+  }
+
+  @Test
+  fun `ps without a PID RSS NAME header returns no rows`() {
+    assertEquals(emptyList<ProcessMemory>(), parsePsRss("1 100 init\n2 200 system"))
+    assertEquals(emptyList<ProcessMemory>(), parsePsRss(""))
+  }
+
+  @Test
+  fun `RSS rows stay visible in the Apps filter because they carry no OOM group`() {
+    val raw = """
+      PID RSS NAME
+        1 1000 system
+        2 2000 com.example.a
+        3 3000 vendor.native
+    """.trimIndent()
+
+    assertEquals(
+      listOf(
+        AppMemory("vendor.native", 3_000L, 1),
+        AppMemory("com.example.a", 2_000L, 1),
+        AppMemory("system", 1_000L, 1),
+      ),
+      groupApps(parsePsRss(raw)),
+    )
+  }
+
+  @Test
+  fun `parseProcessSnapshot labels a PSS dump as PSS`() {
+    val snapshot = parseProcessSnapshot(oomDump)
+
+    assertEquals(ProcessMetric.PSS, snapshot.metric)
+    assertEquals(9, snapshot.rows.size)
+  }
+
+  @Test
+  fun `parseProcessSnapshot falls back to RSS for ps output`() {
+    val raw = """
+      PID RSS NAME
+        1 1234 init
+    """.trimIndent()
+
+    assertEquals(
+      ProcessSnapshot(
+        rows = listOf(ProcessMemory("init", 1, 1_234L, "RSS")),
+        metric = ProcessMetric.RSS,
+      ),
+      parseProcessSnapshot(raw),
+    )
+  }
+
+  @Test
+  fun `parseProcessSnapshot prefers PSS when both shapes are present`() {
+    val raw = """
+      PID RSS NAME
+        1 100 init
+      Total PSS by OOM adjustment:
+          9,000K: Cached
+            2,000K: com.example.app (pid 42)
+    """.trimIndent()
+
+    assertEquals(
+      ProcessSnapshot(
+        rows = listOf(ProcessMemory("com.example.app", 42, 2_000L, "Cached")),
+        metric = ProcessMetric.PSS,
+      ),
+      parseProcessSnapshot(raw),
+    )
+  }
+
+  @Test
+  fun `parseProcessSnapshot is empty PSS when nothing parses`() {
+    assertEquals(
+      ProcessSnapshot(emptyList(), ProcessMetric.PSS),
+      parseProcessSnapshot("not a memory dump"),
+    )
+    assertEquals(
+      ProcessSnapshot(emptyList(), ProcessMetric.PSS),
+      parseProcessSnapshot(""),
+    )
+  }
+
+  @Test
+  fun `ProcessMetric labels name the metric the page shows`() {
+    assertEquals("PSS", ProcessMetric.PSS.label)
+    assertEquals("RSS", ProcessMetric.RSS.label)
+  }
+
+  @Test
+  fun `process and app rows expose memoryKb`() {
+    val process = ProcessMemory("com.example.a", 1, 2_048L, "Cached")
+    val app = AppMemory("com.example.a", 2_048L, 1)
+
+    assertEquals(2_048L, process.memoryKb)
+    assertEquals(2_048L, app.memoryKb)
   }
 
   @Test

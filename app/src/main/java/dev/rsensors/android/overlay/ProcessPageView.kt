@@ -18,6 +18,7 @@ import android.widget.TextView
 import dev.rsensors.android.core.PROCESS_PAGE_SIZE
 import dev.rsensors.android.core.PageSlice
 import dev.rsensors.android.core.ProcessMemory
+import dev.rsensors.android.core.ProcessMetric
 import dev.rsensors.android.core.RamUsage
 import dev.rsensors.android.core.StopDecision
 import dev.rsensors.android.core.StopRisk
@@ -38,14 +39,14 @@ import dev.rsensors.android.ui.Palette
  *
  * Replaces the card's normal content while open: a `Back` / `RAM BY PROCESS` /
  * `Refresh` header, the card's `Used …` summary with an `Apps` / `Processes`
- * filter, eight PSS rows, and a footer with the snapshot age and a pager. The
- * list itself is a snapshot supplied by the service; this view owns only the
- * presentation state (filter, page, labels, selection) and never scans or stops
- * by itself.
+ * filter, eight memory rows, and a footer naming the metric (`PSS` or `RSS`),
+ * the count, the snapshot age and a pager. The list itself is a snapshot
+ * supplied by the service; this view owns only the presentation state (filter,
+ * page, labels, selection) and never scans or stops by itself.
  *
  * T18 turns each row into a selection target. A tap selects the row (blue tint
  * and left accent) and replaces the footer with a selection bar that names the
- * item, its PSS, its package and the `StopPolicy` tier. Stop always asks once
+ * item, its memory, its package and the `StopPolicy` tier. Stop always asks once
  * more before calling [Callbacks.onStopRequested]; protected rows never show
  * Stop. The page keeps its selection while a stop is reported or fails and
  * clears it on Cancel, Back, a filter or page change, Refresh and any new
@@ -106,7 +107,7 @@ class ProcessPageView(
    */
   private data class DisplayRow(
     val label: String,
-    val pssKb: Long,
+    val memoryKb: Long,
     val packageName: String?,
     val groups: Set<String>,
     val pid: Int?,
@@ -136,6 +137,9 @@ class ProcessPageView(
    */
   private var processes: List<ProcessMemory> = emptyList()
   private var capturedAt = 0L
+
+  /** Metric of the current snapshot; the footer labels PSS vs RSS. */
+  private var metric = ProcessMetric.PSS
 
   /** Message shown for the loading state; set by the service per scan. */
   private var loadingMessage = DEFAULT_LOADING_MESSAGE
@@ -432,13 +436,15 @@ class ProcessPageView(
    * otherwise; the filter is untouched. A new snapshot clears the selection,
    * because its rows may no longer describe the same process.
    *
-   * @param processes parsed PSS rows, already in dump order
+   * @param processes parsed rows, already in dump order
    * @param capturedAt epoch millis the dump finished, the footer's age origin
+   * @param metric the metric the rows carry; the footer shows its label
    */
-  fun setData(processes: List<ProcessMemory>, capturedAt: Long) {
+  fun setData(processes: List<ProcessMemory>, capturedAt: Long, metric: ProcessMetric) {
     clearSelection()
     this.processes = processes
     this.capturedAt = capturedAt
+    this.metric = metric
     this.now = System.currentTimeMillis()
     content = Content.DATA
     render()
@@ -529,7 +535,7 @@ class ProcessPageView(
     }
 
   /**
-   * One list row: a 2 dp selection accent, the name with weight 1 and the PSS
+   * One list row: a 2 dp selection accent, the name with weight 1 and the memory
    * value flush right. The row itself is the touch and accessibility target; at
    * the 7 dp vertical padding the target is about 26 dp tall, which is the
    * point of T18's larger row (small-target mis-taps were the user's concern).
@@ -771,7 +777,7 @@ class ProcessPageView(
       groupApps(sortProcesses(processes)).map { app ->
         DisplayRow(
           label = appLabel(app.packageName),
-          pssKb = app.pssKb,
+          memoryKb = app.memoryKb,
           packageName = app.packageName,
           groups = groupsByPackage[app.packageName].orEmpty(),
           pid = null,
@@ -786,7 +792,7 @@ class ProcessPageView(
         val base = process.name.substringBefore(':')
         DisplayRow(
           label = process.name,
-          pssKb = process.pssKb,
+          memoryKb = process.memoryKb,
           packageName = if (resolveApplicationInfo(base) != null) base else null,
           groups = setOf(process.group),
           pid = process.pid,
@@ -961,7 +967,7 @@ class ProcessPageView(
         val selected = isSelected(item)
         holder.container.visibility = VISIBLE
         holder.name.text = item.label
-        holder.value.text = fmtProcessRam(item.pssKb)
+        holder.value.text = fmtProcessRam(item.memoryKb)
         holder.accent.visibility = if (selected) VISIBLE else INVISIBLE
         holder.container.background = rowBackground(selected)
         holder.container.contentDescription = rowDescription(item, selected)
@@ -989,13 +995,13 @@ class ProcessPageView(
     }
     // Neutral wording: a protected row must not promise a Stop.
     val state = if (selected) "Selected." else "Select for details."
-    return "${row.label} ${fmtProcessRam(row.pssKb)}$count. $state"
+    return "${row.label} ${fmtProcessRam(row.memoryKb)}$count. $state"
   }
 
   /**
    * Fills the selection bar for the current state.
    *
-   * Initial: the name and PSS as the title, the package underneath for Apps
+   * Initial: the name and memory as the title, the package underneath for Apps
    * rows, and the tier as the meta — a padlock glyph for PROTECTED, the reason
    * for WARNING, and no meta line for NORMAL (the title and package suffice).
    * After the first Stop tap it becomes `Stop <name>?` plus the whole-app
@@ -1016,9 +1022,9 @@ class ProcessPageView(
       error != null -> "Couldn't stop $name"
       confirming -> "Stop $name?"
       else -> when (mode) {
-        Mode.APPS -> "$name \u00b7 ${fmtProcessRam(row.pssKb)}"
+        Mode.APPS -> "$name \u00b7 ${fmtProcessRam(row.memoryKb)}"
         Mode.PROCESSES ->
-          "$name (pid ${row.pid}) \u00b7 ${fmtProcessRam(row.pssKb)}"
+          "$name (pid ${row.pid}) \u00b7 ${fmtProcessRam(row.memoryKb)}"
       }
     }
 
@@ -1077,12 +1083,14 @@ class ProcessPageView(
   }
 
   /**
-   * Fills the footer: `PSS · N apps · just now` on the left and the pager on the
-   * right. With no rows the pager reads `0 of 0` and both arrows are disabled.
-   * Hidden while a selection bar replaces it.
+   * Fills the footer: `PSS · N apps · just now` or `RSS · N processes · …` on
+   * the left and the pager on the right. The metric label follows the snapshot,
+   * so a `ps` fallback is never shown as PSS. With no rows the pager reads
+   * `0 of 0` and both arrows are disabled. Hidden while a selection bar
+   * replaces it.
    */
   private fun bindFooter(slice: PageSlice<DisplayRow>, total: Int) {
-    footerText.text = "PSS \u00b7 " +
+    footerText.text = metric.label + " \u00b7 " +
       fmtProcessCount(total, mode.apps) + " \u00b7 " +
       fmtAge(now - capturedAt)
     pageLabel.text = if (total == 0) {
@@ -1116,7 +1124,7 @@ class ProcessPageView(
       Content.LOADING -> "RAM by process, scanning"
       Content.ERROR -> "RAM by process, error, $stateMessage"
       Content.UNAVAILABLE -> "RAM by process, unavailable, $stateMessage"
-      Content.DATA -> "RAM by process, ${mode.label}, " +
+      Content.DATA -> "RAM by process, ${metric.label}, ${mode.label}, " +
         "${fmtProcessCount(total, mode.apps)}, updated ${fmtAge(now - capturedAt)}"
     }
     val row = selected ?: return base

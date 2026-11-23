@@ -22,16 +22,20 @@ on the current phone and the exact reason when it is not.
   `CPU+GPU / CPU / GPU / BAT / FPS` selector; and CPU/GPU / BAT / FPS / RAM
   chips that choose what the pill and notification show.
 - **Process memory**: tap the card's RAM row for a paged list of the top memory
-  consumers from the platform memory service, eight per page. `Apps` groups by
-  package and hides native/system rows; `Processes` shows every process.
-  `Refresh` takes a new snapshot; `Back` returns to the card. The normal pill
-  keeps updating while the page is open. Without Shizuku the page explains why
-  it is unavailable and offers the setup action.
+  consumers, eight per page. The page uses PSS from the platform memory service
+  and falls back to RSS from `ps` when that dump has no PSS rows; its footer
+  labels the metric actually shown (PSS or RSS), and Diagnostics names the
+  matching source (`dumpsys meminfo` or `ps`). `Apps` groups by package and
+  hides native/system rows on the PSS route; RSS rows have no OOM group, so
+  `Apps` keeps them. `Processes` shows every process. `Refresh` takes a new
+  snapshot; `Back` returns to the card. The normal pill keeps updating while the
+  page is open. Without Shizuku the page explains why it is unavailable and
+  offers the setup action.
 - **Stop app**: tap a row to select it, then Stop and confirm. The selection
-  bar shows the app, package, PSS and a protection reason. Core system, native,
-  persistent, self and Shizuku processes are protected and never offer Stop;
-  system/foreground/launcher/keyboard/Play services rows warn first. AICore is
-  a warning, not a block. The stop is Android's package force-stop, so the whole
+  bar shows the app, package, its memory and a protection reason. Core system,
+  native, persistent, self and Shizuku processes are protected and never offer
+  Stop; system/foreground/launcher/keyboard/Play services rows warn first. AICore
+  is a warning, not a block. The stop is Android's package force-stop, so the whole
   app stops; the page rescans once and a system app that restarts simply
   reappears. There is no raw kill and no undo.
 - **Temperatures where exposed**: CPU/GPU from the platform thermal service

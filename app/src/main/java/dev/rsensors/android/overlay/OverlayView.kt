@@ -24,6 +24,7 @@ import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.Level
 import dev.rsensors.android.core.PillVisibility
 import dev.rsensors.android.core.ProcessMemory
+import dev.rsensors.android.core.ProcessMetric
 import dev.rsensors.android.core.RamUsage
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.Segment
@@ -571,12 +572,17 @@ class OverlayView(
   /**
    * Delegates a fresh snapshot to the open page.
    *
-   * @param processes parsed PSS rows in dump order
+   * @param processes parsed rows in dump order
    * @param capturedAt epoch millis the dump finished, the footer's age origin
+   * @param metric the metric the rows carry, so the footer labels PSS vs RSS
    */
-  fun setProcessPageData(processes: List<ProcessMemory>, capturedAt: Long) {
+  fun setProcessPageData(
+    processes: List<ProcessMemory>,
+    capturedAt: Long,
+    metric: ProcessMetric,
+  ) {
     if (!pageOpen) return
-    processPage.setData(processes, capturedAt)
+    processPage.setData(processes, capturedAt, metric)
     contentDescription = descriptionText()
   }
 

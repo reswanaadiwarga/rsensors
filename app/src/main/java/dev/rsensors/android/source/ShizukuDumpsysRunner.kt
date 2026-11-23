@@ -188,8 +188,9 @@ class ShizukuDumpsysRunner(context: Context) :
    * Called from the process page's scan thread, not the 2 s poll, so it may
    * take ~2 s.
    *
-   * @return the raw `dumpsys meminfo --oom` stdout, or null on any Shizuku or
-   *   binder failure; the temperature poll must survive a failed scan
+   * @return the raw `dumpsys meminfo --oom` stdout or, when that has no PSS
+   *   rows or fails, the `ps -A -o PID,RSS,NAME` fallback; null on any Shizuku
+   *   or binder failure. The temperature poll must survive a failed scan.
    */
   override fun runMeminfo(): String? {
     val current = service
