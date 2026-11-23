@@ -48,11 +48,11 @@ import androidx.compose.ui.unit.sp
 import dev.rsensors.android.core.ChartFocus
 import dev.rsensors.android.core.ChartSeries
 import dev.rsensors.android.core.DASH
-import dev.rsensors.android.core.FPS_AXIS_MAX
 import dev.rsensors.android.core.SessionLog
 import dev.rsensors.android.core.SessionSample
 import dev.rsensors.android.core.TEMPERATURE_SERIES
 import dev.rsensors.android.core.bounds
+import dev.rsensors.android.core.fpsAxisMax
 import dev.rsensors.android.core.fpsFraction
 import dev.rsensors.android.core.hasFpsValues
 import dev.rsensors.android.core.nearestIndex
@@ -69,12 +69,15 @@ import kotlin.math.roundToLong
  * The whole recorded session is on the x axis and the shared temperature range
  * on the y axis; CPU, GPU, BAT, SOC and SKIN are separate polylines that break
  * at a null poll instead of bridging a sleeping phone or a dropped sensor. T14
- * adds FPS as a sixth line on its own right-hand 0–120 axis, labelled 0/60/120
- * in the FPS colour and included in the tooltip; a v1 session with no FPS
- * values draws neither the line nor the axis. A mouse hover or a touch
- * press/drag selects the nearest sample by time and draws a crosshair, a dot per
- * series and a tooltip with that sample's values. A touch release keeps the
- * selection; a mouse exit clears it. There is no zoom or pan.
+ * adds FPS as a sixth line on its own right-hand axis, labelled 0/60/120 for a
+ * session peaking at or below 120 fps and rising to the next 30 fps step when
+ * the recording does (144 → 150, 165 → 180, … up to 500); the axis labels
+ * follow that ceiling in the FPS colour and the line is included in the
+ * tooltip. A v1 session with no FPS values draws neither the line nor the
+ * axis. A mouse hover or a touch press/drag selects the nearest sample by time
+ * and draws a crosshair, a dot per series and a tooltip with that sample's
+ * values. A touch release keeps the selection; a mouse exit clears it. There is
+ * no zoom or pan.
  *
  * T15d puts the legend above the canvas as six tappable chips, one per series:
  * a tap dims that line (drawn at low alpha under the highlighted ones) and a
@@ -102,6 +105,8 @@ fun SessionGraph(log: SessionLog, modifier: Modifier = Modifier) {
   val labelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
   // Only sessions with a recorded FPS pay for the right-hand axis gutter.
   val hasFps = hasFpsValues(log.samples)
+  // Baseline 0–120, raised only when this session actually recorded faster frames.
+  val fpsMax = remember(log) { fpsAxisMax(log.samples.mapNotNull { it.fps }.maxOrNull()) }
   val rightGutter = if (hasFps) FPS_AXIS_WIDTH else PLOT_RIGHT
 
   Column(modifier = modifier.fillMaxWidth()) {
@@ -180,8 +185,9 @@ fun SessionGraph(log: SessionLog, modifier: Modifier = Modifier) {
       fun yFor(value: Double): Float =
         top + ((maxTemp - value) / (maxTemp - minTemp)).toFloat() * (bottom - top)
 
-      /** FPS grows upward on the fixed 0–120 axis, independent of temperatures. */
-      fun yForFps(value: Double): Float = bottom - fpsFraction(value) * (bottom - top)
+      /** FPS grows upward on its own axis, independent of temperatures. */
+      fun yForFps(value: Double): Float =
+        bottom - fpsFraction(value, fpsMax) * (bottom - top)
 
       // Grid and axes: one horizontal line per labelled temperature, one vertical
       // line per labelled time. Drawn first so the series sit on top.
@@ -209,15 +215,15 @@ fun SessionGraph(log: SessionLog, modifier: Modifier = Modifier) {
         )
       }
 
-      // FPS axis, right gutter: 0/60/120 in the FPS colour. It shares the
-      // vertical plot but not the temperature grid; v1 sessions skip it entirely.
+      // FPS axis, right gutter: 0 / half / ceiling in the FPS colour. It shares
+      // the vertical plot but not the temperature grid; v1 sessions skip it.
       if (hasFps) {
         val fpsStyle = TextStyle(
           color = seriesColor(ChartSeries.FPS),
           fontSize = 10.sp,
           fontFamily = FontFamily.Monospace,
         )
-        listOf(FPS_AXIS_MAX, FPS_AXIS_MAX / 2.0, 0.0).forEach { value ->
+        listOf(fpsMax, fpsMax / 2.0, 0.0).forEach { value ->
           val layout = textMeasurer.measure(fpsLabel(value), fpsStyle)
           drawText(
             textLayoutResult = layout,
@@ -529,7 +535,7 @@ private fun seriesColor(series: ChartSeries): Color = when (series) {
 private fun tempLabel(value: Double): String =
   String.format(Locale.US, "%.0f\u00b0", value)
 
-/** `0`, `60`, `120`; whole frames are enough for the FPS axis. */
+/** `0`, `60`, `120`, `150`, `180`; whole frames are enough for the FPS axis. */
 private fun fpsLabel(value: Double): String = String.format(Locale.US, "%.0f", value)
 
 /** `HH:mm:ss` in the device zone. */
@@ -561,7 +567,7 @@ private val GRAPH_HEIGHT = 220.dp
 private val PLOT_LEFT = 40.dp
 private val PLOT_RIGHT = 10.dp
 
-/** Right gutter when FPS is plotted; wide enough for the `120` label. */
+/** Right gutter when FPS is plotted; wide enough for a 3-digit `150` label. */
 private val FPS_AXIS_WIDTH = 28.dp
 
 /**

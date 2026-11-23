@@ -50,6 +50,57 @@ class SessionChartTest {
   }
 
   @Test
+  fun `fpsAxisMax stays at the 120 baseline without a usable peak`() {
+    assertEquals(120.0, fpsAxisMax(null), 0.0)
+    assertEquals(120.0, fpsAxisMax(Double.NaN), 0.0)
+    assertEquals(120.0, fpsAxisMax(0.0), 0.0)
+    assertEquals(120.0, fpsAxisMax(-5.0), 0.0)
+    assertEquals(120.0, fpsAxisMax(60.0), 0.0)
+    assertEquals(120.0, fpsAxisMax(120.0), 0.0)
+  }
+
+  @Test
+  fun `fpsAxisMax rounds a higher peak up to the next 30 fps step`() {
+    assertEquals(150.0, fpsAxisMax(121.0), 0.0)
+    assertEquals(150.0, fpsAxisMax(144.0), 0.0)
+    // A peak already sitting on a 30 fps boundary keeps that boundary.
+    assertEquals(150.0, fpsAxisMax(150.0), 0.0)
+    assertEquals(180.0, fpsAxisMax(151.0), 0.0)
+    assertEquals(180.0, fpsAxisMax(165.0), 0.0)
+    assertEquals(180.0, fpsAxisMax(180.0), 0.0)
+    assertEquals(240.0, fpsAxisMax(240.0), 0.0)
+  }
+
+  @Test
+  fun `fpsAxisMax caps at the shell maximum`() {
+    assertEquals(500.0, fpsAxisMax(500.0), 0.0)
+    assertEquals(500.0, fpsAxisMax(501.0), 0.0)
+    assertEquals(500.0, fpsAxisMax(Double.POSITIVE_INFINITY), 0.0)
+  }
+
+  @Test
+  fun `fpsFraction maps onto a supplied axis`() {
+    assertEquals(0f, fpsFraction(0.0, 150.0), 0f)
+    assertEquals(0.5f, fpsFraction(75.0, 150.0), 0.0001f)
+    assertEquals(1f, fpsFraction(150.0, 150.0), 0f)
+
+    assertEquals(0f, fpsFraction(0.0, 180.0), 0f)
+    assertEquals(0.5f, fpsFraction(90.0, 180.0), 0.0001f)
+    assertEquals(1f, fpsFraction(180.0, 180.0), 0f)
+
+    // Values past the axis clamp to its ends rather than drawing off-plot.
+    assertEquals(0f, fpsFraction(-10.0, 150.0), 0f)
+    assertEquals(1f, fpsFraction(240.0, 180.0), 0f)
+  }
+
+  @Test
+  fun `fpsFraction treats a non-positive axis as the 120 baseline`() {
+    assertEquals(0.5f, fpsFraction(60.0, 0.0), 0.0001f)
+    assertEquals(0.5f, fpsFraction(60.0, -30.0), 0.0001f)
+    assertEquals(1f, fpsFraction(240.0, 0.0), 0f)
+  }
+
+  @Test
   fun `hasFpsValues is false for an empty session`() {
     assertFalse(hasFpsValues(emptyList()))
   }

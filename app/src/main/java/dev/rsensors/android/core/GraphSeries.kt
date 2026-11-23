@@ -29,7 +29,7 @@ enum class GraphSeries(val label: String) {
    */
   BAT("BAT"),
 
-  /** Foreground frame rate on the fixed 0–120 scale. */
+  /** Foreground frame rate on the FPS axis (120 baseline, raised in 30 fps steps). */
   FPS("FPS");
 
   /**

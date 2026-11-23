@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.Reading
+import dev.rsensors.android.core.fpsAxisMax
 import dev.rsensors.android.core.fpsFraction
 import dev.rsensors.android.ui.Palette
 
@@ -27,8 +28,9 @@ import dev.rsensors.android.ui.Palette
  * - [GraphSeries.BAT]: battery temperature in [Palette.blue], scaled from the
  *   visible battery values with the same padding as the other temperature
  *   modes. Battery is drawn only in this mode; CPU+GPU stays CPU and GPU.
- * - [GraphSeries.FPS]: one [Palette.fps] line on the fixed 0–120 scale
- *   ([fpsFraction]), with no temperature scaling.
+ * - [GraphSeries.FPS]: one [Palette.fps] line on a 0–120 baseline scale that
+ *   rises to the next 30 fps step when the visible window records faster
+ *   frames ([fpsAxisMax] + [fpsFraction]), with no temperature scaling.
  *
  * The card always passes the full history, so neither the selector nor the
  * chips filter what is recorded; changing series only changes what is drawn.
@@ -225,10 +227,13 @@ class SparklineView(context: Context) : View(context) {
   }
 
   /**
-   * Builds the FPS path on the fixed 0–120 axis; a null FPS breaks the line.
+   * Builds the FPS path on a dynamic 0–120 baseline axis; a null FPS breaks the
+   * line.
    *
-   * 0 sits at the bottom and [fpsFraction]'s 1.0 at the top, independent of any
-   * temperature range (ANDROID.md §3, §9).
+   * The ceiling comes from the visible window's own peak ([fpsAxisMax]), so a
+   * 144 Hz or 165 Hz phone is not clipped at 120. 0 sits at the bottom and
+   * [fpsFraction]'s 1.0 at the top, independent of any temperature range
+   * (ANDROID.md §3, §9).
    */
   private fun buildFpsPath(samples: List<Reading>, start: Long, now: Long) {
     cpuPath = Path()
@@ -237,6 +242,7 @@ class SparklineView(context: Context) : View(context) {
     val path = Path()
     fpsPath = path
 
+    val fpsMax = fpsAxisMax(samples.mapNotNull { it.fps }.maxOrNull())
     val inset = STROKE_DP * density / 2f
     val usableHeight = height - inset * 2f
 
@@ -247,7 +253,7 @@ class SparklineView(context: Context) : View(context) {
         false
       } else {
         val x = xFor(reading, start, now)
-        val y = inset + (1f - fpsFraction(fps)) * usableHeight
+        val y = inset + (1f - fpsFraction(fps, fpsMax)) * usableHeight
         if (started) path.lineTo(x, y) else path.moveTo(x, y)
         true
       }

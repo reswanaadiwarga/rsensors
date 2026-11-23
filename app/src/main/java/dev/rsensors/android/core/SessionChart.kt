@@ -1,5 +1,7 @@
 package dev.rsensors.android.core
 
+import kotlin.math.ceil
+
 /**
  * Chart geometry for the full-session graph (ANDROID.md §3, §9, §8 T13).
  *
@@ -22,27 +24,65 @@ enum class ChartSeries(val label: String) {
   SOC("SOC"),
   SKIN("SKIN"),
 
-  /** Foreground frame rate; plotted against the fixed right-hand axis. */
+  /** Foreground frame rate; plotted against its own right-hand axis. */
   FPS("FPS"),
 }
 
 /**
  * Series drawn against the shared temperature axis. FPS is excluded because it
- * has its own fixed 0–120 axis (ANDROID.md §3, §9).
+ * has its own right-hand axis (ANDROID.md §3, §9).
  */
 val TEMPERATURE_SERIES: List<ChartSeries> = ChartSeries.entries.filter { it != ChartSeries.FPS }
 
-/** Top of the right-hand FPS axis, in frames per second. */
+/**
+ * Baseline top of the right-hand FPS axis, in frames per second.
+ *
+ * Most phones cap at 60 or 120 Hz, so 120 keeps those sessions on a stable
+ * scale. A faster panel raises the axis through [fpsAxisMax] instead of
+ * clipping its line at the top of the plot.
+ */
 const val FPS_AXIS_MAX = 120.0
 
+/** FPS axis step above the baseline: 120, 150, 180, … up to the shell cap. */
+private const val FPS_AXIS_STEP = 30.0
+
+/** Highest frame rate the shell can report; mirrors `FpsParse`'s clamp. */
+private const val FPS_AXIS_CAP = 500.0
+
 /**
- * Position of [fps] on the fixed 0–120 axis, as a 0..1 fraction from the bottom.
+ * Top of the FPS axis for a session whose highest recorded frame rate is
+ * [peakFps].
+ *
+ * [FPS_AXIS_MAX] is the baseline: a missing peak (a v1 session), NaN, a
+ * non-positive value, or anything at or below 120 keeps the familiar 0–120
+ * scale. Only a genuinely faster peak raises the axis, rounded up to the next
+ * [FPS_AXIS_STEP] (121 and 144 → 150, 165 → 180) and capped at the shell's
+ * 500 fps maximum so an implausible value cannot stretch the plot.
+ *
+ * @param peakFps highest FPS in the plotted data, or null when none was
+ *   recorded
+ * @return the axis top in frames per second, never below [FPS_AXIS_MAX]
+ */
+fun fpsAxisMax(peakFps: Double?): Double {
+  if (peakFps == null || peakFps.isNaN() || peakFps <= FPS_AXIS_MAX) return FPS_AXIS_MAX
+  val rounded = ceil(peakFps / FPS_AXIS_STEP) * FPS_AXIS_STEP
+  return rounded.coerceAtMost(FPS_AXIS_CAP)
+}
+
+/**
+ * Position of [fps] on a 0–[axisMax] axis, as a 0..1 fraction from the bottom.
  *
  * Clamped so a value the shell could not have produced stays on-plot; the
- * graph's renderer turns this back into a y coordinate.
+ * graph's renderer turns this back into a y coordinate. A non-positive or NaN
+ * axis falls back to the [FPS_AXIS_MAX] baseline so a caller with no usable
+ * peak still gets a valid position.
+ *
+ * @param axisMax top of the axis; defaults to the baseline
  */
-fun fpsFraction(fps: Double): Float =
-  (fps / FPS_AXIS_MAX).toFloat().coerceIn(0f, 1f)
+fun fpsFraction(fps: Double, axisMax: Double = FPS_AXIS_MAX): Float {
+  val axis = if (axisMax.isNaN() || axisMax <= 0.0) FPS_AXIS_MAX else axisMax
+  return (fps / axis).toFloat().coerceIn(0f, 1f)
+}
 
 /**
  * True when at least one [samples] entry recorded a frame rate.
@@ -103,7 +143,7 @@ data class ChartBounds(
  * single sample from collapsing the axis to zero height.
  *
  * @return null when there are no samples, when every sample's [series] value is
- *   null, or for [ChartSeries.FPS], which uses the fixed [FPS_AXIS_MAX] axis; a
+ *   null, or for [ChartSeries.FPS], which uses its own [fpsAxisMax] axis; a
  *   caller may still plot the other series in those cases
  */
 fun bounds(samples: List<SessionSample>, series: ChartSeries): ChartBounds? {

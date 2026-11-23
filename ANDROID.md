@@ -5,9 +5,9 @@ architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
-T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening,
-T19c-1 OEM stop denylist, T19c-2 post-stop verification and T19d-1 brand-aware
-setup guidance, complete in code.**
+T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening, T19b-5
+dynamic FPS axis, T19c-1 OEM stop denylist, T19c-2 post-stop verification and
+T19d-1 brand-aware setup guidance, complete in code.**
 The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
 (T17 is on the parent `feat/process-ram`) and installed/device-verified on the
 target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
@@ -15,12 +15,12 @@ target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
 with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
 (**324 total**); T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**);
 T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
-(**369 total**); T19d-1 adds 18 (**387 total**). All are on local `main`. Device
-evidence is Android 16 only
-where available; normal UserService transport is currently blocked by Shizuku
-13.6.0. The 0.2.0 release remains the published baseline and does not include
-these changes. Nothing is pushed. This file is the source of truth for the app;
-change it before changing code.
+(**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
+All are on local `main`. Device evidence is Android 16 only where available;
+normal UserService transport is currently blocked by Shizuku 13.6.0. The 0.2.0
+release remains the published baseline and does not include these changes.
+Nothing is pushed. This file is the source of truth for the app; change it
+before changing code.
 
 ## Verification scope
 
@@ -133,7 +133,8 @@ nice-to-haves:
   Stop monitoring (formerly "Stop overlay"), and a
   2-minute sparkline tagged `GRAPH · 2 MIN` with a cycle
   button selecting CPU+GPU / CPU / GPU / BAT / FPS (battery in blue, FPS in
-  purple on a fixed 0–120 scale).
+  purple on a 0–120 axis that rises to the next 30 fps step — 150, 180, … up to
+  500 — only when the recorded window peaks above 120).
   Four toggle chips (CPU/GPU / BAT / FPS / RAM) choose what the pill and
   notification show; at least one stays on. The card keeps its detail rows. The
   graph selector is independent of the chips, and the in-memory history always
@@ -188,7 +189,9 @@ nice-to-haves:
   notification.
 - **Sessions**: a list of saved sessions (start, duration, samples) and a
   full-session graph with CPU/GPU/BAT/SOC/SKIN plus FPS on its own right-hand
-  0–120 axis. Long-press selects sessions for deletion (tap toggles in
+  axis. The FPS axis starts at 0–120 and grows to the next 30 fps step (150,
+  180, … up to 500) when the session's recorded peak exceeds the current
+  ceiling. Long-press selects sessions for deletion (tap toggles in
   selection mode, Cancel exits, Delete confirms). The session currently being
   recorded is hidden until it stops. Mouse hover and touch drag show a
   crosshair and a tooltip with the timestamp and values at the nearest sample.
@@ -531,6 +534,7 @@ the per-feature Diagnostics status table before the universality work.
 | T19b-2 ✅ | Meminfo parser tolerance | Work-profile `(pid N) (user 10)`, `kB`/`KB`/`kb`, `/ activities` and `:remote` pid suffixes, case-insensitive `pid`/`user`; unclean headings become `Unknown` instead of inheriting the previous group; malformed `(pid` rows do not change the group. PSS/grouping/sort/page behavior unchanged. 330 tests; 25 independent acceptance checks; Android 16 smoke scanned 281 processes in Apps/Processes with a working pager. The `ps`/RSS fallback and the PSS-vs-RSS label are delivered by T19b-3 below. |
 | T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only; the production Shizuku UserService is currently blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE, so the normal-transport `ps` fallback is not device-verified. |
 | T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified because Shizuku 13.6.0 blocks the normal UserService transport. |
+| T19b-5 ✅ | Dynamic FPS axis | Session graph and card sparkline use a 120 fps baseline raised in 30 fps steps (150/180/…/500) from the recorded peak; 120 is still the default. v1/no-FPS sessions still hide the axis. 392 tests; 53 independent acceptance checks; parent-red + mutation-red. Real 144/165 Hz rendering remains device-unverified. |
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
 | T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
 | T19d-1 ✅ | Brand-aware setup guidance | New pure `core/OemGuidance.kt`: `oemFamily(Build.MANUFACTURER, Build.BRAND)` checks the manufacturer before the brand, ignores case and surrounding spaces, and maps Xiaomi/Redmi/POCO, Samsung, Huawei/HONOR, Oppo/OnePlus/Realme/ColorOS, vivo/iQOO and stock-like makers (Google/AOSP/Motorola/Sony/Asus/Nothing) to a family; unknown, blank and `null` fall back to `OTHER`. The main screen's "At boot" paragraph and the guide's "After a reboot" note now show the family copy instead of HyperOS-only text, and the XIAOMI copy keeps the original HyperOS wording. README gains a compatibility-notes table. 387 tests; no device. Real OEM setting labels and behaviour remain device-unverified, and HarmonyOS NEXT cannot run Android APKs. |
@@ -717,8 +721,9 @@ Defaults are chosen; change them now, not during implementation.
   UserService registration to `version(3)` so a stale v2 shell process cannot
   answer the new call.
 - FPS thresholds: below 30 red, below 50 amber, otherwise green. The session
-  graph gives FPS its own right-hand 0–120 axis; the temperature axis stays
-  independent.
+  graph gives FPS its own right-hand axis, 0–120 by default and raised in 30 fps
+  steps (150, 180, … up to 500) only when the recorded peak exceeds it; the
+  temperature axis stays independent.
 - SessionLog v2 adds `fps`; the decoder still opens v1 files (FPS empty).
 - The CPU/GPU/FPS toggles persist in `OverlayPreferences`, at least one stays
   on, and drive the pill and notification. The card's detail rows stay visible
@@ -729,7 +734,8 @@ Defaults are chosen; change them now, not during implementation.
   notification); Shizuku and permissions are untouched. The source/age line is
   removed from the card.
 - The graph header reads `GRAPH · 2 MIN`; FPS uses the same purple as the
-  session graph and the fixed 0–120 scale, temperatures keep their own padded
+  session graph and the same 0–120 baseline (raised to 150/180/… up to 500 when
+  the visible window records faster frames), temperatures keep their own padded
   min/max. The selector cycles on tap and survives a restart.
 - Shizuku start ritual: pairing saves the key; Start needs the adbd connect
   service (`_adb-tls-connect`). If Start says "searching for wireless debugging
