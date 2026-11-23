@@ -216,11 +216,11 @@ capability probing and OEM policy, not a missing permission.
 
 - `.../ui/DiagnosticsActivity.kt` — capability matrix: per feature tier,
   source, ready/permission/timeout/empty state, PSS/RSS, HAL ready.
-- `.../ui/MainActivity.kt` + `.../boot/BootReceiver.kt` — OEM-aware autostart
-  copy (HyperOS background autostart, Samsung Sleeping apps, ColorOS Auto
-  launch, vivo Autostart, Huawei App Launch), FGS/boot-blocked status; a Tier 0
-  “Manage apps / Open app info” list of visible packages with manual Force stop
-  guidance (hide/restore the overlay; no result verification).
+- `.../ui/MainActivity.kt` + `.../ui/ShizukuHelpActivity.kt` — OEM-aware
+  autostart/Shizuku copy (HyperOS background autostart, Samsung Sleeping apps,
+  ColorOS Auto launch, vivo Autostart, Huawei App Launch) delivered in T19d-1;
+  the OEM labels and behaviour remain device-unverified. A Tier 0 “Manage apps /
+  Open app info” list with manual Force stop guidance is still open.
 - `.../source/ThermalStatusSource.kt` / `core/Reading.kt` — add the API 30+
   `getThermalHeadroom()` value as a normalized secondary severity, `NaN`
   handling, and a Diagnostics label; keep the API 29+ status.

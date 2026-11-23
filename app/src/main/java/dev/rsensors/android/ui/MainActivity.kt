@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import dev.rsensors.android.core.oemFamily
+import dev.rsensors.android.core.oemGuidance
 import dev.rsensors.android.overlay.OverlayPreferences
 import dev.rsensors.android.overlay.OverlayService
 import rikka.shizuku.Shizuku
@@ -62,7 +64,8 @@ import rikka.shizuku.Shizuku
  *
  * T10 adds the "At boot" section: a persisted switch that
  * [dev.rsensors.android.boot.BootReceiver] reads after a reboot, and the
- * HyperOS autostart guidance. The switch is refreshed in the same
+ * brand-aware autostart guidance from
+ * [dev.rsensors.android.core.OemGuidance]. The switch is refreshed in the same
  * [refreshState] path as every other row, so it is correct after a return from
  * the app's system settings page.
  */
@@ -397,6 +400,10 @@ private fun HomeScreen(
   onRequestShizuku: () -> Unit,
   onOpenShizukuHelp: () -> Unit,
 ) {
+  // The boot paragraph names this phone's OEM settings. The mapping is pure and
+  // reads only static Build fields, so it needs no state or effect and stays
+  // correct if the UI is recomposed.
+  val bootGuidance = oemGuidance(oemFamily(Build.MANUFACTURER, Build.BRAND))
   Surface(
     modifier = Modifier.fillMaxSize(),
     color = MaterialTheme.colorScheme.background,
@@ -544,10 +551,7 @@ private fun HomeScreen(
         Switch(checked = bootEnabled, onCheckedChange = onBootChange)
       }
       Text(
-        "HyperOS may block autostart. In the app's system settings, allow " +
-          "Autostart and remove the battery restriction, or the overlay stays " +
-          "off until you start it by hand. Shizuku still has to be started " +
-          "after every reboot, so the pill shows battery temperature until then.",
+        bootGuidance.bootBody,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
       )

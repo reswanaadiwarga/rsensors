@@ -53,6 +53,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import dev.rsensors.android.core.KNOWN_BAD_SHIZUKU_VERSION
 import dev.rsensors.android.core.hasKnownShizukuProblem
+import dev.rsensors.android.core.oemFamily
+import dev.rsensors.android.core.oemGuidance
 import rikka.shizuku.Shizuku
 
 /**
@@ -62,7 +64,10 @@ import rikka.shizuku.Shizuku
  * "searching for wireless debugging device service"; the fix is toggling
  * Wireless debugging, which restarts the connection Shizuku starts through. The
  * guide is text with exact UI labels, not screenshots, so it stays correct when
- * an OEM renames a Settings row.
+ * an OEM renames a Settings row. The "After a reboot" card carries one extra
+ * brand-aware hint from [dev.rsensors.android.core.OemGuidance] because the
+ * reboot step is where OEM autostart and battery policy usually bite; it is a
+ * hint, not a claim that the step works on that phone.
  *
  * Layout: the live status card sits above a scrolling list of one collapsible
  * card per topic. The status is the evidence every step is judged against, so it
@@ -104,6 +109,7 @@ class ShizukuHelpActivity : ComponentActivity() {
           version = version,
           wirelessDebugging = wirelessDebugging,
           versionWarning = versionWarning,
+          oemHint = oemGuidance(oemFamily(Build.MANUFACTURER, Build.BRAND)).shizukuBody,
           onRefresh = ::refresh,
           onOpenShizuku = ::openShizuku,
           onOpenDeveloperOptions = ::openDeveloperOptions,
@@ -267,7 +273,7 @@ class ShizukuHelpActivity : ComponentActivity() {
   }
 }
 
-/** Bit of [GUIDE_SECTIONS] index 0, the section that opens on its own. */
+/** Bit of the first [guideSections] entry, the section that opens on its own. */
 private const val FIRST_TIME_BIT = 1
 
 /** Expand/collapse duration; short enough to feel like a tap, long enough to follow. */
@@ -290,6 +296,7 @@ private fun ShizukuHelpScreen(
   version: String?,
   wirelessDebugging: Boolean?,
   versionWarning: Boolean,
+  oemHint: String,
   onRefresh: () -> Unit,
   onOpenShizuku: () -> Unit,
   onOpenDeveloperOptions: () -> Unit,
@@ -354,6 +361,7 @@ private fun ShizukuHelpScreen(
         if (pinStatus) statusCard()
 
         SectionList(
+          sections = guideSections(oemHint),
           modifier = Modifier.weight(1f),
           expandedMask = expandedMask,
           onToggle = { index -> expandedMask = expandedMask xor (1 shl index) },
@@ -368,7 +376,9 @@ private fun ShizukuHelpScreen(
 /**
  * The scrolling list of section cards.
  *
- * @param expandedMask one bit per [GUIDE_SECTIONS] index; a set bit is open
+ * @param sections the guide in display order; supplied per screen so the reboot
+ *   card can carry the device's OEM hint
+ * @param expandedMask one bit per [sections] index; a set bit is open
  * @param onToggle receives the index whose card was tapped
  * @param onOpenDiagnostics invoked by the last card's trailing button
  * @param leading optional first item, used to scroll the status card with the
@@ -376,6 +386,7 @@ private fun ShizukuHelpScreen(
  */
 @Composable
 private fun SectionList(
+  sections: List<GuideSection>,
   expandedMask: Int,
   onToggle: (Int) -> Unit,
   onOpenDiagnostics: () -> Unit,
@@ -389,7 +400,7 @@ private fun SectionList(
     if (leading != null) {
       item(key = "status") { leading() }
     }
-    itemsIndexed(GUIDE_SECTIONS, key = { _, section -> section.title }) { index, section ->
+    itemsIndexed(sections, key = { _, section -> section.title }) { index, section ->
       val bit = 1 shl index
       GuideSectionCard(
         section = section,
@@ -738,9 +749,11 @@ private val LAST_RESORT_STEPS = listOf(
  * The guide in order; every title is a card header.
  *
  * The order is the reading order the guide's cross-references assume ("use the
- * searching fix above"), so it is not sorted or filtered.
+ * searching fix above"), so it is not sorted or filtered. [oemHint] is the
+ * brand-aware Shizuku note on the reboot card; it stays a hint, so the card
+ * still describes the generic reboot flow.
  */
-private val GUIDE_SECTIONS = listOf(
+private fun guideSections(oemHint: String): List<GuideSection> = listOf(
   GuideSection(
     title = "First-time setup",
     intro = "Pair Shizuku once, start its server, then let Rsensors use it. " +
@@ -775,6 +788,7 @@ private val GUIDE_SECTIONS = listOf(
     intro = "Android ends the Shizuku server when the phone restarts. Rsensors " +
       "shows BAT until the server is running again.",
     steps = REBOOT_STEPS,
+    note = oemHint,
     why = "Shizuku's server is a background process, and Android stops those on " +
       "reboot. Nothing restarts it by itself.",
   ),

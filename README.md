@@ -85,6 +85,25 @@ Shizuku. On the verified device, Shizuku 13.6.0 fails to start its UserService
 (upstream issue [#2633](https://github.com/RikkaApps/Shizuku/issues/2633));
 13.5.4 is the working version there. Other devices and versions may differ.
 
+## Compatibility notes
+
+These are setup hints for common OEM software, not verified support. Only the
+POCO X7 Pro build above has been run on a phone; the app names the settings to
+check and Diagnostics reports what your device actually exposes. The research
+and limits are in [docs/UNIVERSALITY.md](docs/UNIVERSALITY.md).
+
+| Device family | Autostart / background | Shizuku note |
+|---|---|---|
+| AOSP / Pixel | No OEM autostart manager; battery optimization can still stop the overlay. | Start the Shizuku server again after a reboot. |
+| Samsung | Remove Rsensors from Sleeping apps and Deep sleeping apps; Auto Blocker may block sideloading. | Keep Shizuku out of Sleeping apps, or the server can stop while the screen is off. |
+| Xiaomi / HyperOS | Allow Autostart and Background autostart, set battery to No restrictions, and lock the app in Recents. | Allow Shizuku to autostart; toggle Wireless debugging if Start keeps searching. |
+| Huawei / HONOR | App launch → Manage manually, with Auto-launch, Secondary launch and Run in background. | Many builds lack Wireless debugging; use USB debugging. |
+| ColorOS / Oppo / Realme | Allow Auto launch and background activity, and turn off system optimization for Rsensors. | Permission monitoring can revoke Shizuku's grant after a reboot. |
+| vivo / iQOO | Allow Autostart and high background power use. | Start Shizuku again after a restart and check that it is allowed to autostart. |
+
+HarmonyOS NEXT does not run Android APKs, so no Android build of Rsensors can
+be installed there.
+
 ## What "works" means
 
 "Verified" in this README means the named build was run on the device above. It

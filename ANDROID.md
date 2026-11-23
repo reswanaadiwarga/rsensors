@@ -6,7 +6,8 @@ Development evidence was archived outside this repository and is not bundled.
 
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
 T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening,
-T19c-1 OEM stop denylist and T19c-2 post-stop verification, complete in code.**
+T19c-1 OEM stop denylist, T19c-2 post-stop verification and T19d-1 brand-aware
+setup guidance, complete in code.**
 The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
 (T17 is on the parent `feat/process-ram`) and installed/device-verified on the
 target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
@@ -14,7 +15,8 @@ target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
 with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
 (**324 total**); T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**);
 T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
-(**369 total**). All are on local `main`. Device evidence is Android 16 only
+(**369 total**); T19d-1 adds 18 (**387 total**). All are on local `main`. Device
+evidence is Android 16 only
 where available; normal UserService transport is currently blocked by Shizuku
 13.6.0. The 0.2.0 release remains the published baseline and does not include
 these changes. Nothing is pushed. This file is the source of truth for the app;
@@ -531,11 +533,12 @@ the per-feature Diagnostics status table before the universality work.
 | T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified because Shizuku 13.6.0 blocks the normal UserService transport. |
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
 | T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
+| T19d-1 ✅ | Brand-aware setup guidance | New pure `core/OemGuidance.kt`: `oemFamily(Build.MANUFACTURER, Build.BRAND)` checks the manufacturer before the brand, ignores case and surrounding spaces, and maps Xiaomi/Redmi/POCO, Samsung, Huawei/HONOR, Oppo/OnePlus/Realme/ColorOS, vivo/iQOO and stock-like makers (Google/AOSP/Motorola/Sony/Asus/Nothing) to a family; unknown, blank and `null` fall back to `OTHER`. The main screen's "At boot" paragraph and the guide's "After a reboot" note now show the family copy instead of HyperOS-only text, and the XIAOMI copy keeps the original HyperOS wording. README gains a compatibility-notes table. 387 tests; no device. Real OEM setting labels and behaviour remain device-unverified, and HarmonyOS NEXT cannot run Android APKs. |
 
-T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19c-1/T19c-2 slices
-are complete in code on `main`. T17/T18/T19a are ancestors of `main` from their
-feature branches; record, snap, all four T19b slices and both T19c slices are
-merged. Nothing is pushed.
+T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19c-1/T19c-2/T19d-1
+slices are complete in code on `main`. T17/T18/T19a are ancestors of `main` from
+their feature branches; record, snap, all four T19b slices, both T19c slices and
+T19d-1 are merged. Nothing is pushed.
 
 ### T19a feature status (2026-11-23)
 
