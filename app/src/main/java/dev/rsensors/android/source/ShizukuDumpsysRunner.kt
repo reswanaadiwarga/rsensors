@@ -14,17 +14,19 @@ import dev.rsensors.android.shizuku.IDumpsysService
 import rikka.shizuku.Shizuku
 
 /**
- * [DumpsysRunner], [FpsRunner], [MeminfoRunner] and [StopRunner] backed by one
- * Shizuku UserService (ANDROID.md §5, §9, §8 T14, §8 T17, §8 T18).
+ * [DumpsysRunner], [FpsRunner], [MeminfoRunner], [PackageFactsRunner] and
+ * [StopRunner] backed by one Shizuku UserService (ANDROID.md §5, §9, §8 T14,
+ * §8 T17, §8 T18, §8 T19c-3b).
  *
  * Shizuku 13 no longer exposes a process API, so the work runs inside
  * [DumpsysUserService] — a process Shizuku starts as the shell UID — and this
  * runner only binds to it and calls [IDumpsysService.runDumpsys] /
  * [IDumpsysService.runFps] / [IDumpsysService.runMeminfo] /
- * [IDumpsysService.runProcessUids] / [IDumpsysService.stopPackage]. All calls
+ * [IDumpsysService.runProcessUids] / [IDumpsysService.runPackageDump] /
+ * [IDumpsysService.stopPackage]. All calls
  * share the binding: `dumpsys window`, `--list`, `--latency`, the meminfo dump,
- * the `ps` UID table and `am force-stop` must run in the same shell process as
- * the thermal dump. Binding is lazy and
+ * the `ps` UID table, the on-demand package dump and `am force-stop` must run
+ * in the same shell process as the thermal dump. Binding is lazy and
  * self-healing: the first call after a granted permission starts a bind and
  * yields null for that poll, later polls use the live service, and any failure
  * clears the reference so the next poll binds again. That is what makes killing
@@ -38,8 +40,8 @@ import rikka.shizuku.Shizuku
  * temperature poll continues.
  *
  * Threading: [run] and [runFps] are called on the poller's worker thread and
- * [runMeminfo], [runProcessUids] and [stopPackage] on the process page's own
- * worker thread, while
+ * [runMeminfo], [runProcessUids], [runPackageDump] and [stopPackage] on the
+ * process page's own worker thread, while
  * the connection callbacks arrive on the main thread. The binder calls
  * themselves (`pingBinder`, `checkSelfPermission`, `bindUserService`) are
  * posted to the main looper, matching the official demo and avoiding any
@@ -59,7 +61,7 @@ import rikka.shizuku.Shizuku
  *   UserService component and the provider authority
  */
 class ShizukuDumpsysRunner(context: Context) :
-  DumpsysRunner, FpsRunner, MeminfoRunner, StopRunner {
+  DumpsysRunner, FpsRunner, MeminfoRunner, PackageFactsRunner, StopRunner {
   private val appContext = context.applicationContext
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -68,8 +70,8 @@ class ShizukuDumpsysRunner(context: Context) :
    * Binding descriptor for the UserService.
    *
    * `daemon(false)` because the OS may reclaim an idle service between polls;
-   * `version(6)` forces a fresh registration after the T19c-3a AIDL added
-   * `runProcessUids`, so a stale v5 shell process cannot answer the new
+   * `version(7)` forces a fresh registration after the T19c-3b AIDL added
+   * `runPackageDump`, so a stale v6 shell process cannot answer the new
    * transaction;
    * `tag("dumpsys")` keeps that record addressable; `debuggable(false)` keeps
    * the shell-side process un-debuggable in release and debug builds alike.
@@ -81,7 +83,7 @@ class ShizukuDumpsysRunner(context: Context) :
     .processNameSuffix("dumpsys")
     .tag(TAG_NAME)
     .debuggable(false)
-    .version(6)
+    .version(7)
 
   /** Live binding, or null while unbound; written on both threads. */
   @Volatile private var service: IDumpsysService? = null
@@ -247,6 +249,40 @@ class ShizukuDumpsysRunner(context: Context) :
   }
 
   /**
+   * Runs one `dumpsys package <packageName>` read through the same shell
+   * process as [run] (T19c-3b).
+   *
+   * Called on the process page's worker only when a selected row's
+   * `ApplicationInfo` is hidden. A missing or failed service reports null like
+   * the other routes, so the page resolves the selection with no facts and
+   * keeps its existing hidden-details warning.
+   *
+   * @param packageName the selected row's package name
+   * @return raw `dumpsys package` stdout, or null on any Shizuku or binder
+   *   failure; a rejected name comes back as `ERR invalid package`, which the
+   *   parser reads as no facts
+   */
+  override fun runPackageDump(packageName: String): String? {
+    val current = service
+    if (current == null) {
+      Log.d(TAG, "runPackageDump: no UserService (binding=$binding)")
+      abandonTimedOutBind()
+      tryBind()
+      return null
+    }
+    return try {
+      Log.d(TAG, "runPackageDump call pkg=$packageName")
+      val dump = current.runPackageDump(packageName)
+      Log.d(TAG, "runPackageDump returned ${dump.length} chars")
+      dump
+    } catch (e: Exception) {
+      Log.w(TAG, "runPackageDump failed pkg=$packageName", e)
+      forgetService()
+      null
+    }
+  }
+
+  /**
    * Stops [packageName] through the same shell process as [run] (ANDROID.md §3,
    * §9, §8 T18).
    *
@@ -363,7 +399,7 @@ class ShizukuDumpsysRunner(context: Context) :
     }
 
     try {
-      Log.i(TAG, "bindUserService version=6 tag=$TAG_NAME")
+      Log.i(TAG, "bindUserService version=7 tag=$TAG_NAME")
       Shizuku.bindUserService(args, connection)
       synchronized(bindLock) {
         // The connection may already have fired while bindUserService ran; do

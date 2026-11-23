@@ -10,8 +10,11 @@
 // rows or fails (version 4, ANDROID.md §8 T17, T19b-3). `stopPackage`
 // runs `am force-stop` for one already-validated package and returns `OK` or
 // `ERR …` (ANDROID.md §8 T18). `runProcessUids` returns `ps -A -o PID,UID,NAME`
-// stdout so the page can protect hidden core processes by UID (T19c-3a); adding
-// it bumps the UserService registration to version 6.
+// stdout so the page can protect hidden core processes by UID (T19c-3a);
+// `runPackageDump` returns `dumpsys package <pkg>` stdout for on-demand
+// UID/system/persistent facts about the selected hidden package (T19c-3b).
+// Adding either bumps the UserService registration: version 6 for
+// `runProcessUids`, version 7 for `runPackageDump`.
 package dev.rsensors.android.shizuku;
 
 interface IDumpsysService {
@@ -21,4 +24,5 @@ interface IDumpsysService {
     String runMeminfo() = 3;
     String stopPackage(String packageName) = 4;
     String runProcessUids() = 5;
+    String runPackageDump(String packageName) = 6;
 }

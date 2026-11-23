@@ -35,11 +35,15 @@ on the current phone and the exact reason when it is not.
   bar shows the app, package, its memory and a protection reason. Core system,
   native, persistent, self and Shizuku processes are protected and never offer
   Stop; system/foreground/launcher/keyboard/Play services rows warn first. AICore
-  is a warning, not a block. A shell UID lookup protects hidden core rows by UID;
-  it does not reveal system or persistent flags the app cannot see. The stop is
-  Android's package force-stop, so the whole
-  app stops; the page rescans once and a system app that restarts simply
-  reappears. There is no raw kill and no undo.
+  is a warning, not a block. When Android hides an app's details, selecting it
+  reads that one package's flags from the shell (`dumpsys package`) and shows
+  `Resolving app details…` until they arrive; the list and Refresh stay usable,
+  the result is cached, and the app then gets its real system/persistent tier.
+  A shell UID lookup protects hidden core rows by UID too. Only the selected
+  package is read — no `QUERY_ALL_PACKAGES` and no package list. The stop is
+  Android's package force-stop, so the whole app stops; the page rescans once
+  and a system app that restarts simply reappears. There is no raw kill and no
+  undo; a stop made through **Manage apps** is not verified.
 - **Temperatures where exposed**: CPU/GPU from the platform thermal service
   through Shizuku, when the HAL provides a matching zone; battery temperature
   and thermal status from Android. Missing sensors render `—`, never another

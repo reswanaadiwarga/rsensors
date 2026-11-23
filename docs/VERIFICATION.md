@@ -26,7 +26,7 @@ gradlew.bat :app:lintDebug
 gradlew.bat :app:assembleDebug
 ```
 
-Latest result: **401 JVM tests, 33 suites, 0 failures/errors/skipped**; lint and
+Latest result: **416 JVM tests, 34 suites, 0 failures/errors/skipped**; lint and
 assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 
 ## Feature matrix
@@ -42,6 +42,7 @@ assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 | CPU/GPU temperatures | No | `dumpsys thermalservice` | Verified on target with 13.5.4 (historical); transport restored, not re-run in the latest pass. Parser hardening is JVM-tested |
 | Foreground FPS | No | SurfaceFlinger | Verified on target with 13.5.4 (historical 0/53/60/120 fps); transport restored, not re-run in the latest pass. Android 8–14/17 formats are fixture-only |
 | Per-process PSS/RSS | No | `dumpsys meminfo` / `ps` | PSS + shell UID table re-verified on 13.5.4: 296-row scan, 1050 numeric UID rows, pager and Diagnostics OK. RSS UI/source verified through a forced shim; normal `ps` fallback not forced |
+| Hidden-package flags | No | `dumpsys package <pkg>` | Device: hidden Apps rows showed `Resolving app details…`, then resolved SYSTEM; real dumps matched parser for Settings/Chrome/YouTube/android. Hidden Processes rows remain protected as unresolved |
 | Stop app | No | `am force-stop` + `ps` verification | Stop verified on target with 13.5.4 (historical); post-stop verification is code/JVM-tested, normal transport restored but not re-run in the latest pass |
 | High-refresh FPS graph (144/165) | No | SurfaceFlinger | Geometry JVM-tested; real 144/165 Hz rendering not verified |
 

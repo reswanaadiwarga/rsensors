@@ -36,6 +36,7 @@ import dev.rsensors.android.core.attachUids
 import dev.rsensors.android.core.fmtFps
 import dev.rsensors.android.core.iconSpec
 import dev.rsensors.android.core.parseFpsReply
+import dev.rsensors.android.core.parsePackageFacts
 import dev.rsensors.android.core.parseProcessSnapshot
 import dev.rsensors.android.core.parsePsUid
 import dev.rsensors.android.core.stopDecision
@@ -46,6 +47,7 @@ import dev.rsensors.android.source.DirectReader
 import dev.rsensors.android.source.DumpsysThermalSource
 import dev.rsensors.android.source.FpsRunner
 import dev.rsensors.android.source.MeminfoRunner
+import dev.rsensors.android.source.PackageFactsRunner
 import dev.rsensors.android.source.SensorSource
 import dev.rsensors.android.source.SessionStore
 import dev.rsensors.android.source.ShizukuDumpsysRunner
@@ -213,6 +215,14 @@ class OverlayService : Service() {
    * thread, hence volatile.
    */
   @Volatile private var meminfoRunner: MeminfoRunner? = null
+
+  /**
+   * On-demand package-facts path for a selected hidden row (T19c-3b), sharing
+   * the same Shizuku UserService binding; null in demo mode and after teardown.
+   * Written when the source is built on the worker and read from the main
+   * thread's resolve request, hence volatile.
+   */
+  @Volatile private var packageFactsRunner: PackageFactsRunner? = null
 
   /**
    * Stop path for the T18 selection bar, sharing the same Shizuku UserService
@@ -568,6 +578,49 @@ class OverlayService : Service() {
   }
 
   /**
+   * Resolves one hidden package's UID and flags on demand (T19c-3b).
+   *
+   * Called on the main thread only after the page selects a row whose
+   * `ApplicationInfo` is hidden. The shell dump runs on [meminfoHandler], never
+   * the 2 s poll worker, and its result returns to the main thread. Missing
+   * prerequisites, a null runner or any shell failure resolve the request with
+   * null, so the page keeps its existing hidden-details warning instead of
+   * claiming facts it does not have. The view caches the result and applies it
+   * only when that package is still selected.
+   */
+  private fun resolvePackageFacts(packageName: String) {
+    if (!processPageOpen) return
+    if (OverlayPreferences.isDemo(this) ||
+      !isShizukuRunning() ||
+      !hasShizukuPermission()
+    ) {
+      view?.setProcessPageFacts(packageName, null)
+      return
+    }
+    val runner = packageFactsRunner
+    val handler = meminfoHandler
+    if (runner == null || handler == null) {
+      view?.setProcessPageFacts(packageName, null)
+      return
+    }
+    Log.i(TAG, "package facts start pkg=$packageName")
+    handler.post {
+      val raw = try {
+        runner.runPackageDump(packageName)
+      } catch (e: Exception) {
+        Log.w(TAG, "package facts dump failed pkg=$packageName", e)
+        null
+      }
+      val facts = raw?.let { parsePackageFacts(it) }
+      mainHandler.post {
+        if (!processPageOpen) return@post
+        view?.setProcessPageFacts(packageName, facts)
+        Log.i(TAG, "package facts end pkg=$packageName resolved=${facts != null}")
+      }
+    }
+  }
+
+  /**
    * Applies a scan result on the main thread, if it is still wanted.
    *
    * A closed page or a newer generation drops the result silently at debug
@@ -886,6 +939,10 @@ class OverlayService : Service() {
       requestStop(target)
     }
 
+    override fun onResolvePackage(packageName: String) {
+      resolvePackageFacts(packageName)
+    }
+
     /**
      * Reads the snap setting at release time instead of caching it, so a change
      * made on the main screen applies to the very next drag with no service
@@ -1018,6 +1075,7 @@ class OverlayService : Service() {
     meminfoThread = null
     meminfoHandler = null
     meminfoRunner = null
+    packageFactsRunner = null
 
     if (receiverRegistered) {
       try {
@@ -1186,6 +1244,7 @@ class OverlayService : Service() {
     sysfsSource = null
     fpsRunner = null
     meminfoRunner = null
+    packageFactsRunner = null
     stopRunner = null
     if (OverlayPreferences.isDemo(this)) return DemoSource()
 
@@ -1193,9 +1252,10 @@ class OverlayService : Service() {
     // must share a single UserService binding (ANDROID.md §9).
     val runner = ShizukuDumpsysRunner(this)
     fpsRunner = runner
-    // The same binding answers the process page's meminfo scan (T17) and its
-    // confirmed stop (T18).
+    // The same binding answers the process page's meminfo scan (T17), its
+    // on-demand hidden-package facts (T19c-3b) and its confirmed stop (T18).
     meminfoRunner = runner
+    packageFactsRunner = runner
     stopRunner = runner
     val sysfs =
       SysfsSource(

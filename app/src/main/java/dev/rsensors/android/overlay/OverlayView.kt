@@ -22,6 +22,7 @@ import dev.rsensors.android.core.GPU_HOT
 import dev.rsensors.android.core.GPU_WARN
 import dev.rsensors.android.core.GraphSeries
 import dev.rsensors.android.core.Level
+import dev.rsensors.android.core.PackageFacts
 import dev.rsensors.android.core.PillVisibility
 import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.ProcessMetric
@@ -140,6 +141,13 @@ class OverlayView(
     fun onStopRequested(target: StopTarget)
 
     /**
+     * The process page needs shell-side facts for one hidden package
+     * (T19c-3b). The service answers through [setProcessPageFacts] on the main
+     * thread; null keeps the page's existing hidden-details warning.
+     */
+    fun onResolvePackage(packageName: String)
+
+    /**
      * Whether a drag release should snap to the nearer side edge.
      *
      * The service reads the persisted preference here at release time, so a
@@ -186,6 +194,10 @@ class OverlayView(
 
       override fun onStopRequested(target: StopTarget) {
         callbacks.onStopRequested(target)
+      }
+
+      override fun onResolvePackage(packageName: String) {
+        callbacks.onResolvePackage(packageName)
       }
     },
   )
@@ -617,6 +629,18 @@ class OverlayView(
   }
 
   /**
+   * Delegates one on-demand package-facts result to the open page (T19c-3b).
+   *
+   * The page caches it and updates only a still-matching selection; a late
+   * result for a closed page is dropped here like the other page states.
+   */
+  fun setProcessPageFacts(packageName: String, facts: PackageFacts?) {
+    if (!pageOpen) return
+    processPage.setProcessPageFacts(packageName, facts)
+    contentDescription = descriptionText()
+  }
+
+  /**
    * Leaves the process page, restores the 220 dp card and keeps it expanded.
    *
    * The service's defensive exit path uses this too; a normal Back tap reaches
@@ -625,6 +649,7 @@ class OverlayView(
   fun closeProcessPage() {
     if (!pageOpen) return
     pageOpen = false
+    processPage.clearSelectionForClose()
     processPage.visibility = GONE
     homePage.visibility = VISIBLE
     setCardWidth(CARD_WIDTH_DP)

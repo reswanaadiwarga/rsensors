@@ -16,6 +16,7 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.rsensors.android.core.PROCESS_PAGE_SIZE
+import dev.rsensors.android.core.PackageFacts
 import dev.rsensors.android.core.PageSlice
 import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.ProcessMetric
@@ -83,6 +84,14 @@ class ProcessPageView(
      * through [setStopError] or [setLoading].
      */
     fun onStopRequested(target: StopTarget)
+
+    /**
+     * The selected row's [ApplicationInfo] is hidden, so the page needs one
+     * shell-side `dumpsys package` lookup before it can compute the stop tier.
+     * The service reports the result through [setProcessPageFacts], on the main
+     * thread; a null result keeps the existing hidden-details warning.
+     */
+    fun onResolvePackage(packageName: String)
   }
 
   /** The two filter modes; [apps] also selects the footer's noun. */
@@ -177,6 +186,19 @@ class ProcessPageView(
 
   /** Resolved [ApplicationInfo] keyed by package; a miss is cached as null too. */
   private val infoCache = HashMap<String, ApplicationInfo?>()
+
+  /**
+   * Shell-resolved facts for hidden packages, keyed by package. Only the
+   * selected package is looked up, and only after its [ApplicationInfo] turns
+   * out to be hidden; the cache keeps a later selection from asking again.
+   */
+  private val factsCache = HashMap<String, PackageFacts>()
+
+  /** Packages whose facts lookup has finished, including a null result. */
+  private val resolvedPackages = HashSet<String>()
+
+  /** Packages with a lookup in flight; Stop is hidden while one is selected. */
+  private val resolvingPackages = HashSet<String>()
 
   /** Launcher packages, resolved on first use from the HOME intent. */
   private var launcherPackages: Set<String>? = null
@@ -496,6 +518,32 @@ class ProcessPageView(
   }
 
   /**
+   * Applies an on-demand package-facts result for [packageName] (T19c-3b).
+   *
+   * Called by the service on the main thread. The result is always cached and
+   * the package is marked resolved — even a null result, so the page does not
+   * ask again. Only a result for the still-selected package re-computes the
+   * stop target and repaints; a late result for another package is cached
+   * silently and cannot change the current selection. With null facts the
+   * target keeps its row UID and falls back to the hidden-details warning.
+   */
+  fun setProcessPageFacts(packageName: String, facts: PackageFacts?) {
+    resolvedPackages += packageName
+    resolvingPackages -= packageName
+    if (facts == null) {
+      factsCache.remove(packageName)
+    } else {
+      factsCache[packageName] = facts
+    }
+
+    val row = selected ?: return
+    if (row.packageName != packageName) return
+    selectedTarget = stopTargetFor(row)
+    selectedTarget?.let { selectedDecision = stopDecision(it) }
+    render()
+  }
+
+  /**
    * Updates the summary line and the snapshot age from the normal poll.
    *
    * The process rows stay a snapshot; only the `Used …` figures and `updated …`
@@ -717,22 +765,33 @@ class ProcessPageView(
     callbacks.onBack()
   }
 
-  /** Selects one row and shows its tier; nothing is stopped on this tap. */
+  /**
+   * Selects one row and shows its tier; nothing is stopped on this tap.
+   *
+   * A hidden `ApplicationInfo` means the tier is unknown until the shell
+   * reports the package facts, so this starts one lookup, shows the resolving
+   * meta and hides Stop. The list, filter, pager and Refresh stay usable: the
+   * lookup is asynchronous and [setProcessPageFacts] applies only to the row
+   * that is still selected.
+   */
   private fun selectRow(row: DisplayRow) {
     if (stopping) return
-    val target = stopTargetFor(row)
+    val resolveFacts = needsPackageFacts(row)
     selected = row
-    selectedTarget = target
-    selectedDecision = stopDecision(target)
+    selectedTarget = stopTargetFor(row)
+    selectedTarget?.let { selectedDecision = stopDecision(it) }
     confirming = false
     stopError = null
+    val packageName = row.packageName
+    if (resolveFacts && packageName != null) resolvingPackages += packageName
     render()
+    if (resolveFacts && packageName != null) callbacks.onResolvePackage(packageName)
   }
 
   /** Default selection state: a tier and, for warning rows, its reason. */
   private fun onStopTapped() {
     val decision = selectedDecision ?: return
-    if (stopping || decision.risk == StopRisk.PROTECTED) return
+    if (stopping || isResolvingSelection() || decision.risk == StopRisk.PROTECTED) return
     if (!confirming) {
       // A retry after a failure goes through the same confirmation again.
       stopError = null
@@ -760,6 +819,19 @@ class ProcessPageView(
     confirming = false
     stopping = false
     stopError = null
+    // A lookup may still be in flight; dropping the marker lets a later
+    // selection request it again instead of sticking on "Resolving…".
+    resolvingPackages.clear()
+  }
+
+  /**
+   * Clears selection state when the page is hidden.
+   *
+   * A package lookup cannot be cancelled; a late result is cached by
+   * [setProcessPageFacts] but cannot keep a reopened page in "Resolving…".
+   */
+  fun clearSelectionForClose() {
+    clearSelection()
   }
 
   /**
@@ -816,29 +888,62 @@ class ProcessPageView(
    * their base package resolves, so native/unknown names are protected. All
    * Android flags and the launcher/IME/self/Shizuku identities come from the
    * same cached lookups the list uses. The UID is the resolved
-   * `ApplicationInfo` UID when visible, otherwise the shell-reported row UID
-   * (T19c-3a), so a hidden core process is still protected by UID < 10000
-   * instead of being downgraded to a warning.
+   * `ApplicationInfo` UID when visible, otherwise the shell-resolved package
+   * facts UID (T19c-3b), otherwise the shell-reported row UID (T19c-3a), so a
+   * hidden core process is still protected by UID < 10000 instead of being
+   * downgraded to a warning. When `ApplicationInfo` is hidden but facts exist,
+   * the system/updated-system/persistent flags come from those facts; only a
+   * row with neither source remains `detailsHidden`.
    */
   private fun stopTargetFor(row: DisplayRow): StopTarget {
     val appRow = mode == Mode.APPS
     val packageName = row.packageName
     val info = packageName?.let { resolveApplicationInfo(it) }
+    val facts = packageName?.let { factsCache[it] }
     return StopTarget(
       packageName = packageName,
-      uid = info?.uid ?: row.uid,
+      uid = info?.uid ?: facts?.uid ?: row.uid,
       groups = row.groups,
       isKnownApp = appRow || info != null,
-      isSystemApp = info != null && (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
-      isUpdatedSystemApp = info != null &&
-        (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0,
-      isPersistent = info != null && (info.flags and ApplicationInfo.FLAG_PERSISTENT) != 0,
-      detailsHidden = appRow && info == null,
+      isSystemApp = if (info == null) {
+        facts?.isSystem == true
+      } else {
+        (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+      },
+      isUpdatedSystemApp = if (info == null) {
+        facts?.isUpdatedSystem == true
+      } else {
+        (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+      },
+      isPersistent = if (info == null) {
+        facts?.isPersistent == true
+      } else {
+        (info.flags and ApplicationInfo.FLAG_PERSISTENT) != 0
+      },
+      detailsHidden = appRow && info == null && facts == null,
       isLauncher = packageName != null && launcherPackages().contains(packageName),
       isIme = packageName != null && packageName == currentImePackage(),
       isSelf = packageName != null && packageName == context.packageName,
       isShizuku = packageName == SHIZUKU_PACKAGE,
     )
+  }
+
+  /**
+   * True when selecting [row] must ask the shell before Stop can be offered:
+   * the row names a package, Android hides its [ApplicationInfo], and no
+   * lookup has finished or is in flight for it.
+   */
+  private fun needsPackageFacts(row: DisplayRow): Boolean {
+    val packageName = row.packageName ?: return false
+    return resolveApplicationInfo(packageName) == null &&
+      packageName !in resolvedPackages &&
+      packageName !in resolvingPackages
+  }
+
+  /** True while the selected row still waits for its package-facts lookup. */
+  private fun isResolvingSelection(): Boolean {
+    val packageName = selected?.packageName ?: return false
+    return packageName in resolvingPackages
   }
 
   /**
@@ -1016,7 +1121,8 @@ class ProcessPageView(
    * sentence; while the stop runs both buttons are hidden; after a failure it
    * becomes `Couldn't stop <name>` plus the message and the reason, with
    * Stop/Cancel so the user can retry or cancel. Protected rows never receive
-   * a Stop button.
+   * a Stop button. While a hidden package's facts are still being looked up, the
+   * meta says `Resolving app details…` and Stop is absent and disabled.
    */
   private fun bindSelectionBar() {
     val row = selected ?: return
@@ -1024,6 +1130,7 @@ class ProcessPageView(
     val name = selectionName(row)
     val error = stopError
     val risk = decision.risk
+    val resolving = isResolvingSelection()
 
     selectionTitle.text = when {
       stopping -> "Stopping $name\u2026"
@@ -1042,6 +1149,7 @@ class ProcessPageView(
     selectionPackage.visibility = if (mode == Mode.APPS) VISIBLE else GONE
 
     val meta = when {
+      resolving -> "Resolving app details\u2026"
       error != null -> listOfNotNull(error, decision.reason).joinToString(" \u00b7 ")
       confirming -> confirmationMeta(decision)
       risk == StopRisk.PROTECTED -> "\uD83D\uDD12 PROTECTED \u00b7 ${decision.reason}"
@@ -1052,16 +1160,17 @@ class ProcessPageView(
     selectionMeta.visibility = if (meta != null) VISIBLE else GONE
     selectionMeta.setTextColor(
       when {
+        resolving -> Palette.gray
         error != null -> Palette.red
         risk == StopRisk.WARNING -> Palette.amber
         else -> Palette.gray
       },
     )
 
-    val stoppable = risk != StopRisk.PROTECTED
+    val stoppable = risk != StopRisk.PROTECTED && !resolving
     stopButton.visibility = if (stoppable && !stopping) VISIBLE else GONE
     cancelButton.visibility = if (stopping) GONE else VISIBLE
-    stopButton.isEnabled = !stopping
+    stopButton.isEnabled = !stopping && !resolving
     cancelButton.isEnabled = !stopping
     val label = if (mode == Mode.PROCESSES) "Stop app" else "Stop"
     stopButton.text = label
@@ -1145,6 +1254,7 @@ class ProcessPageView(
     val reason = decision.reason?.let { ", $it" }.orEmpty()
     val state = when {
       stopping -> ", stopping"
+      isResolvingSelection() -> ", resolving app details"
       stopError != null -> ", stop failed"
       confirming -> ", confirm stop"
       else -> ""

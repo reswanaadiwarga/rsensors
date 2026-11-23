@@ -7,8 +7,9 @@ Development evidence was archived outside this repository and is not bundled.
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
 T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening, T19b-5
 dynamic FPS axis, T19c-1 OEM stop denylist, T19c-2 post-stop verification,
-T19c-3a shell UID enrichment, T19d-1 brand-aware setup guidance and T19d-2
-manual Manage apps route, complete in code.**
+T19c-3a shell UID enrichment, T19c-3b on-demand hidden-package flags, T19d-1
+brand-aware setup guidance and T19d-2 manual Manage apps route, complete in
+code.**
 The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
 (T17 is on the parent `feat/process-ram`) and installed/device-verified on the
 target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
@@ -18,7 +19,7 @@ with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
 T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
 (**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
 The Shizuku 13.5.4 guide update adds 1 (**393 total**); T19c-3a adds 8
-(**401 total**).
+(**401 total**); T19c-3b adds 15 (**416 total**).
 All are on local `main`. Device evidence is Android 16 only where available;
 normal UserService transport is currently blocked by Shizuku 13.6.0. The 0.2.0
 release remains the published baseline and does not include these changes.
@@ -551,7 +552,8 @@ the per-feature Diagnostics status table before the universality work.
 | T19b-5 ✅ | Dynamic FPS axis | Session graph and card sparkline use a 120 fps baseline raised in 30 fps steps (150/180/…/500) from the recorded peak; 120 is still the default. v1/no-FPS sessions still hide the axis. 392 tests; 53 independent acceptance checks; parent-red + mutation-red. Real 144/165 Hz rendering remains device-unverified. |
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
 | T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
-| T19c-3a ✅ | Shell UID enrichment | The AIDL adds `runProcessUids() = 5` and the UserService registration moves to `version(6)`. `DumpsysUserService.runProcessUids` runs `/system/bin/ps -A -o PID,UID,NAME` (absolute path, argv array, read to EOF before waiting) and returns raw stdout; the runner returns null on Shizuku/binder failure like `runMeminfo`. Pure `parsePsUid` locates `PID`/`UID`/`NAME` (or `CMD`/`COMMAND`) by header position, case-insensitively, accepts only positive pids and non-negative numeric UIDs, skips malformed rows and keeps the last duplicate pid; `attachUids` copies rows with matching UIDs and preserves order/fields without mutating. The scan attaches the table to the snapshot on the meminfo thread, and `groupApps` carries the first non-null member UID. The stop target uses `ApplicationInfo.uid` when visible, otherwise the row UID, so a hidden core process with UID < 10000 is PROTECTED; system/persistent flags still require the package resolver. A failed UID command keeps null UIDs and the scan continues. 401 tests. Device-verified: the target printed numeric UIDs for all 1050 rows, a 296-row process scan attached them and paged without a crash, and Diagnostics showed the scan. Hidden-core-row protection remains manual; system/persistent flags still require the package resolver. |
+| T19c-3a ✅ | Shell UID enrichment | The AIDL adds `runProcessUids() = 5` and the UserService registration moves to `version(6)`. `DumpsysUserService.runProcessUids` runs `/system/bin/ps -A -o PID,UID,NAME` (absolute path, argv array, read to EOF before waiting) and returns raw stdout; the runner returns null on Shizuku/binder failure like `runMeminfo`. Pure `parsePsUid` locates `PID`/`UID`/`NAME` (or `CMD`/`COMMAND`) by header position, case-insensitively, accepts only positive pids and non-negative numeric UIDs, skips malformed rows and keeps the last duplicate pid; `attachUids` copies rows with matching UIDs and preserves order/fields without mutating. The scan attaches the table to the snapshot on the meminfo thread, and `groupApps` carries the first non-null member UID. The stop target uses `ApplicationInfo.uid` when visible, otherwise the row UID, so a hidden core process with UID < 10000 is PROTECTED; T19c-3b later adds the system/persistent flags on demand. A failed UID command keeps null UIDs and the scan continues. 401 tests. Device-verified: the target printed numeric UIDs for all 1050 rows, a 296-row process scan attached them and paged without a crash, and Diagnostics showed the scan. Hidden-core-row protection remains manual; T19c-3b now resolves the system/persistent flags on demand for the selected hidden package. |
+| T19c-3b ✅ | Hidden-package flags | The AIDL adds `runPackageDump(packageName) = 6` and the UserService registration moves to `version(7)`. `DumpsysUserService.runPackageDump` validates with the same `PACKAGE_NAME`/`MAX_PACKAGE_LENGTH` rule as `stopPackage` (`ERR invalid package` otherwise) and runs `/system/bin/dumpsys package <pkg>` through the existing absolute-path argv helper, read to EOF before waiting; failures throw so the runner reports null like `runMeminfo`. Pure `PackageFacts(uid, isSystem, isUpdatedSystem, isPersistent)` + `parsePackageFacts` read only the first `Package [pkg]` block and stop at the next package/user/permission section: `appId` wins over `userId`, `pkgFlags` wins over the first package-level `flags`, and whole tokens are matched case-insensitively (`SYSTEM`, `UPDATED_SYSTEM_APP`, `PERSISTENT`), so `SYSTEMISH` or permission `flags` later never count; null when the block has neither UID nor flags. Selecting a row with hidden `ApplicationInfo` shows `Resolving app details…`, hides/disables Stop and asks the service once through `onResolvePackage`; the `dumpsys package` call runs on the meminfo thread, is cached with its null result, and a stale result only updates a matching selection. `stopTargetFor` uses `info.uid ?: facts.uid ?: row.uid` and ORs the three flags only when `ApplicationInfo` is hidden; `detailsHidden` stays true only with neither source, so a hidden system/persistent app warns/protects instead of always warning. Flags are resolved on demand for the selected package only; no `QUERY_ALL_PACKAGES`, no result verification for manual stops. 416 tests. Device-verified: hidden Apps rows showed `Resolving app details…` with no Stop, then resolved to a system warning; the shell dump ran on the meminfo thread (~133 ms for YouTube), and closing the page now clears the in-flight marker. Hidden Processes rows remain protected as unresolved; system/persistent flags for them are not resolved. |
 | T19d-1 ✅ | Brand-aware setup guidance | New pure `core/OemGuidance.kt`: `oemFamily(Build.MANUFACTURER, Build.BRAND)` checks the manufacturer before the brand, ignores case and surrounding spaces, and maps Xiaomi/Redmi/POCO, Samsung, Huawei/HONOR, Oppo/OnePlus/Realme/ColorOS, vivo/iQOO and stock-like makers (Google/AOSP/Motorola/Sony/Asus/Nothing) to a family; unknown, blank and `null` fall back to `OTHER`. The main screen's "At boot" paragraph and the guide's "After a reboot" note now show the family copy instead of HyperOS-only text, and the XIAOMI copy keeps the original HyperOS wording. README gains a compatibility-notes table. 387 tests; no device. Real OEM setting labels and behaviour remain device-unverified, and HarmonyOS NEXT cannot run Android APKs. |
 | T19d-2 ✅ | Manual Manage apps fallback | Tier 0 escape hatch for phones without the Shizuku shell route: an `OutlinedButton` labelled `Manage apps` on the main screen opens Android's app list, where the user opens an app's info page and taps `Force stop` by hand. API 29+ launches `Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS` and falls back to `Settings.ACTION_APPLICATION_SETTINGS` when that launch throws; both attempts are guarded, so a missing Settings activity cannot crash the app. The copy states that Android asks for confirmation and Rsensors cannot verify or undo the stop, and no code reads a result. No new permission, no `QUERY_ALL_PACKAGES`, no package list, and no Shizuku/shell/process-page change. UI-only; 393 tests unchanged. Device-checked on the target: the intent opened HyperOS's `Apps` screen (`com.miui.securitycenter/.appmanager.AppManagerMainActivity`), Back returned to the main screen without a crash, and logcat showed no FATAL/ANR. The vendor may substitute the settings activity; still not a universal or device-verified claim for other phones. |
 | T19e-1 ✅ | Verification matrix | Adds `docs/VERIFICATION.md`: current target/Shizuku environment, gates, feature × no-shell/Shizuku × device evidence, and the explicit not-verified list (Android 8–14/17 formats, OEMs, second device, HAL/sysfs, shell fallbacks, high-refresh rendering). Links it from README. No code change; device claims remain target-only. |
@@ -578,6 +580,39 @@ Settings, and Back returns to the main screen. No new permission, no
 with copy that frames it as the Shizuku-unavailable fallback. Other phones may
 map these actions to a different screen, so this is a device-checked route on
 the target only, not a universal or device-verified claim for other phones.
+
+### T19c-3b on-demand hidden-package facts (2026-11-24)
+
+A hidden `ApplicationInfo` used to leave the stop policy without the package's
+app id and system flags, so every hidden Apps row fell back to the generic
+"details are hidden" warning. `runPackageDump(packageName) = 6` now lets the
+page ask the shell for exactly that package's `dumpsys package <pkg>` stdout
+after the user selects the row; the registration is `version(7)` so a stale
+`version(6)` shell process cannot answer the new transaction. The name passes
+the same validation as `stopPackage` before any process starts, and the dump
+goes through the existing absolute-path argv helper, read to EOF before waiting.
+
+`parsePackageFacts` reads only the first `Package [pkg]` block. It stops at the
+next package header or at the first user/permission section, which is what keeps
+permission-level `flags=[ … ]` lines out. `appId` is preferred over `userId`;
+`pkgFlags` is preferred over the first package-level `flags`. Only whole
+space-separated tokens count, case-insensitively. A block with neither a UID
+nor a flag block yields null, and a null shell result is cached the same way as
+a successful one so selecting the row again does not re-run `dumpsys`.
+
+The page shows `Resolving app details…` and removes/disables Stop until the
+result arrives; the list, filter, pager and Refresh stay usable. The service
+runs the dump on the meminfo thread, never the 2 s poll or the main thread, and
+posts the parsed facts back to the main thread. The view caches facts for any
+package but recomputes the target only when that package is still selected, so
+a late result cannot change another selection. With facts, `stopTargetFor` takes
+`info.uid ?: facts.uid ?: row.uid` and takes the system/updated-system/
+persistent booleans from the facts only when `ApplicationInfo` is hidden;
+`detailsHidden` remains true only when neither source exists. A hidden
+`SYSTEM`/`PERSISTENT` package therefore reaches its real warning/protected tier
+instead of always showing the generic hidden warning. No `QUERY_ALL_PACKAGES`
+is added, no package list is read, and a manual stop still has no result
+verification. The real flag text and the resolving bar are device-only checks.
 
 ### T19a feature status (2026-11-23)
 
@@ -872,15 +907,19 @@ Defaults are chosen; change them now, not during implementation.
   is none. AICore is appId 10308, `SYSTEM | UPDATED_SYSTEM_APP`, OOM group
   `Visible` (~956 MB): WARNING, not protected; Android may restart it when Nano
   is used. Apps rows count as known apps even when Android package visibility
-  hides `ApplicationInfo`; they are WARNING ("details hidden") and stay
-  stoppable. Processes rows are stoppable only when the base package resolves;
-  native or unresolved names are PROTECTED. Package visibility is not
-  broadened. A shell UID table (`ps -A -o PID,UID,NAME`) is attached to every
-  snapshot row (T19c-3a); the stop target prefers `ApplicationInfo.uid` and
-  falls back to the row UID, so a hidden app whose UID is < 10000 is PROTECTED
-  instead of a WARNING. The table fills only the UID: system/persistent flags
-  and the base package still come from the package resolver, so an unresolved
-  Processes row stays PROTECTED.
+  hides `ApplicationInfo`; selecting one starts a single on-demand
+  `dumpsys package <pkg>` lookup (T19c-3b) and the bar shows `Resolving app
+  details…` with no Stop until it returns. The facts supply the app id and
+  `SYSTEM`/`UPDATED_SYSTEM_APP`/`PERSISTENT`; a null result keeps the generic
+  WARNING ("details hidden"). Hidden Apps rows stay stoppable. Processes rows are stoppable
+  only when the base package resolves; native or unresolved names are
+  PROTECTED. Package visibility is not broadened. A shell UID table
+  (`ps -A -o PID,UID,NAME`) is attached to every snapshot row (T19c-3a); the
+  stop target prefers `ApplicationInfo.uid`, then the facts UID, then the row
+  UID, so a hidden app whose UID is < 10000 is PROTECTED instead of a WARNING.
+  The table itself fills only the UID; system/persistent flags for a Processes
+  row still require the package resolver, so an unresolved Processes row stays
+  PROTECTED.
 - Stop runs only as `am force-stop <package>` in the shell UserService; no raw
   `kill` and no per-process kill. The package must match
   `^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$` and be passed as a `ProcessBuilder` arg,
@@ -896,7 +935,11 @@ Defaults are chosen; change them now, not during implementation.
   AIDL adds `stopPackage() = 4` and bumps the
   UserService to `version(5)`; a failed command returns `ERR …` and never
   crashes the page. T19c-3a adds `runProcessUids() = 5` and bumps the
-  UserService to `version(6)`. The runner ignores late `onServiceConnected`/
+  UserService to `version(6)`; T19c-3b adds `runPackageDump(packageName) = 6`
+  and bumps it to `version(7)`. `runPackageDump` validates with the same
+  package rule as `stopPackage`, returns raw `dumpsys package` stdout, and
+  throws on shell failure so the runner reports null and the page keeps its
+  hidden-details fallback. The runner ignores late `onServiceConnected`/
   `onServiceDisconnected` callbacks unless a bind is pending (T17 verifier
   finding).
 - Tap selects; Stop always confirms; protected rows never show Stop and show a

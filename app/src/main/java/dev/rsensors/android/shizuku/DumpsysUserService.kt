@@ -30,7 +30,10 @@ import java.io.IOException
  * ([dev.rsensors.android.core.parseMeminfoPss]); when that dump yields no PSS
  * rows it falls back to `ps -A -o PID,RSS,NAME` so the page still has data
  * (T19b-3); [runProcessUids] runs `ps -A -o PID,UID,NAME` and returns its
- * stdout so the page can attach UIDs to hidden rows (T19c-3a); [stopPackage]
+ * stdout so the page can attach UIDs to hidden rows (T19c-3a); [runPackageDump]
+ * runs `dumpsys package <package>` and returns its stdout so the page can
+ * resolve system/updated-system/persistent facts for a selected hidden package
+ * (T19c-3b); [stopPackage]
  * runs `am force-stop <package>` for the T18 stop action and, because exit 0 is
  * not proof, re-checks the package through [stillRunningProcesses].
  *
@@ -44,7 +47,8 @@ import java.io.IOException
  * referenced by name from another process, hence `@Keep`.
  *
  * Threading: each call on the binder thread; the process object is confined to
- * that call. [runDumpsys], [runMeminfo] and [runProcessUids] leave errors to
+ * that call. [runDumpsys], [runMeminfo], [runProcessUids] and
+ * [runPackageDump] leave errors to
  * propagate as binder/IO failures, which
  * [dev.rsensors.android.source.ShizukuDumpsysRunner] converts to a null dump so
  * a shell hiccup cannot crash the overlay; [stopPackage] catches its own so a
@@ -194,6 +198,34 @@ class DumpsysUserService : IDumpsysService.Stub {
   }
 
   /**
+   * Returns one raw `dumpsys package <packageName>` dump for the T19c-3b
+   * hidden-package facts.
+   *
+   * The name is validated with the same rule as [stopPackage] before any
+   * process exists; an invalid name is `ERR invalid package`. The command goes
+   * through [runDumpsys] — absolute [DUMPSYS] path, argv array, read to EOF
+   * before waiting — so a large package dump cannot deadlock a full pipe and
+   * nothing parses a shell string.
+   *
+   * @param packageName package to dump; rejected without running anything when
+   *   it is empty, longer than 255 characters or not a dot-separated package
+   *   name
+   * @return the dump stdout verbatim, or `ERR invalid package`
+   * @throws java.io.IOException when the process cannot start or exits non-zero,
+   *   so the app-side runner turns the failure into null
+   */
+  override fun runPackageDump(packageName: String): String {
+    Log.i(TAG, "runPackageDump start pkg=$packageName")
+    if (!isValidPackageName(packageName)) {
+      Log.w(TAG, "runPackageDump rejected pkg=$packageName")
+      return "ERR invalid package"
+    }
+    val output = runDumpsys("package", packageName)
+    Log.i(TAG, "runPackageDump end pkg=$packageName chars=${output.length}")
+    return output
+  }
+
+  /**
    * Stops every process of [packageName] with `am force-stop` in this shell
    * process, then confirms the stop with `ps` (ANDROID.md §3, §9, §8 T18).
    *
@@ -220,7 +252,7 @@ class DumpsysUserService : IDumpsysService.Stub {
    */
   override fun stopPackage(packageName: String): String {
     Log.i(TAG, "stopPackage start pkg=$packageName")
-    if (packageName.length !in 1..MAX_PACKAGE_LENGTH || !PACKAGE_NAME.matches(packageName)) {
+    if (!isValidPackageName(packageName)) {
       Log.w(TAG, "stopPackage rejected pkg=$packageName")
       return "ERR invalid package"
     }
@@ -247,6 +279,13 @@ class DumpsysUserService : IDumpsysService.Stub {
       "ERR " + shortReason(e)
     }
   }
+
+  /**
+   * The one package-name rule shared by [stopPackage] and [runPackageDump], so
+   * the two privileged routes cannot drift apart.
+   */
+  private fun isValidPackageName(packageName: String): Boolean =
+    packageName.length in 1..MAX_PACKAGE_LENGTH && PACKAGE_NAME.matches(packageName)
 
   /**
    * Confirms with `ps` that [packageName] has no process left after `am`
