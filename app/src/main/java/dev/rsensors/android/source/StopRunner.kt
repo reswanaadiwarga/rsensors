@@ -17,12 +17,17 @@ interface StopRunner {
    *
    * The implementation validates the package name before touching a process
    * and passes it as a `ProcessBuilder` argument, never as a shell string.
+   * `am force-stop` exiting 0 is not proof: after a successful exit the
+   * implementation re-reads the process table and rejects a still-running
+   * package.
    *
    * @param packageName package to force-stop; an invalid name is rejected
    *   without running anything
-   * @return `OK` when the stop command succeeded, `ERR <reason>` when it was
-   *   rejected or failed, or null when no shell response could be obtained
-   *   (Shizuku stopped, permission revoked, dead binder)
+   * @return `OK` when the stop command exited 0 and (when the verification
+   *   could run) no process of the package remained; `ERR <reason>` when it was
+   *   rejected, exited non-zero, failed, or left a process running; or null
+   *   when no shell response could be obtained (Shizuku stopped, permission
+   *   revoked, dead binder)
    */
   fun stopPackage(packageName: String): String?
 }

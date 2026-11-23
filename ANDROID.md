@@ -5,19 +5,20 @@ architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
-T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening and
-T19c-1 OEM stop denylist, complete in code.** The RAM pill,
-process-memory page and Stop app are committed on `feat/stop-app` (T17 is on the
-parent `feat/process-ram`) and installed/device-verified on the target (**280
-tests** at T18). T19a adds the Diagnostics feature-status table (**299 tests**,
-160 independent acceptance checks; device-verified 2026-11-23 with caveats).
-Record and snap add 11 tests (**310 total**); T19b-1 adds 14 (**324 total**);
-T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**); T19b-4 adds 10
-(**355 total**); T19c-1 adds 5 (**360 total**). All are on local `main`. Device
-evidence is Android 16 only where available; normal UserService transport is
-currently blocked by Shizuku 13.6.0. The 0.2.0 release remains the published
-baseline and does not include these changes. Nothing is pushed. This file is the
-source of truth for the app; change it before changing code.
+T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening,
+T19c-1 OEM stop denylist and T19c-2 post-stop verification, complete in code.**
+The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
+(T17 is on the parent `feat/process-ram`) and installed/device-verified on the
+target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
+(**299 tests**, 160 independent acceptance checks; device-verified 2026-11-23
+with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
+(**324 total**); T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**);
+T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
+(**369 total**). All are on local `main`. Device evidence is Android 16 only
+where available; normal UserService transport is currently blocked by Shizuku
+13.6.0. The 0.2.0 release remains the published baseline and does not include
+these changes. Nothing is pushed. This file is the source of truth for the app;
+change it before changing code.
 
 ## Verification scope
 
@@ -529,11 +530,12 @@ the per-feature Diagnostics status table before the universality work.
 | T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only; the production Shizuku UserService is currently blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE, so the normal-transport `ps` fallback is not device-verified. |
 | T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified because Shizuku 13.6.0 blocks the normal UserService transport. |
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
+| T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
 
-T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19c-1 slices are
-complete in code on `main`. T17/T18/T19a are ancestors of `main` from their
-feature branches; record, snap, all four T19b slices and T19c-1 are merged.
-Nothing is pushed.
+T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19c-1/T19c-2 slices
+are complete in code on `main`. T17/T18/T19a are ancestors of `main` from their
+feature branches; record, snap, all four T19b slices and both T19c slices are
+merged. Nothing is pushed.
 
 ### T19a feature status (2026-11-23)
 
@@ -833,7 +835,16 @@ Defaults are chosen; change them now, not during implementation.
 - Stop runs only as `am force-stop <package>` in the shell UserService; no raw
   `kill` and no per-process kill. The package must match
   `^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$` and be passed as a `ProcessBuilder` arg,
-  never a shell string. The AIDL adds `stopPackage() = 4` and bumps the
+  never a shell string. Exit 0 is not taken as proof of the stop: any output
+  the command prints on success (some builds print `Force stopping …`) is
+  ignored, and the service then re-reads `ps -A -o PID,RSS,NAME` and matches
+  the exact package or its `package:` children (`core/StopVerification.kt`,
+  T19c-2). A surviving process turns the reply into
+  `ERR still running: <up to 3 names>` instead of `OK`; when that verification
+  `ps` cannot run or parses to no rows the reply stays `OK`, because the
+  command was accepted and the page's rescan is the fallback proof. Only a
+  non-zero `am` exit keeps the command output in `ERR exit=<code> <line>`. The
+  AIDL adds `stopPackage() = 4` and bumps the
   UserService to `version(5)`; a failed command returns `ERR …` and never
   crashes the page. The runner ignores late `onServiceConnected`/
   `onServiceDisconnected` callbacks unless a bind is pending (T17 verifier

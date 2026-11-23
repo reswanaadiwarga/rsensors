@@ -11,6 +11,8 @@ import dev.rsensors.android.core.parseCandidateLayers
 import dev.rsensors.android.core.parseFocusedComponent
 import dev.rsensors.android.core.parseLatencyRows
 import dev.rsensors.android.core.parseMeminfoPss
+import dev.rsensors.android.core.parsePsRss
+import dev.rsensors.android.core.stillRunningProcesses
 import java.io.IOException
 
 /**
@@ -28,7 +30,8 @@ import java.io.IOException
  * ([dev.rsensors.android.core.parseMeminfoPss]); when that dump yields no PSS
  * rows it falls back to `ps -A -o PID,RSS,NAME` so the page still has data
  * (T19b-3); [stopPackage] runs `am force-stop <package>` for the T18 stop
- * action.
+ * action and, because exit 0 is not proof, re-checks the package through
+ * [stillRunningProcesses].
  *
  * `dumpsys` is invoked by absolute path because a UserService process does not
  * inherit the app's PATH; relying on a bare `dumpsys` was a silent
@@ -166,18 +169,27 @@ class DumpsysUserService : IDumpsysService.Stub {
 
   /**
    * Stops every process of [packageName] with `am force-stop` in this shell
-   * process (ANDROID.md §3, §9, §8 T18).
+   * process, then confirms the stop with `ps` (ANDROID.md §3, §9, §8 T18).
    *
    * The name is checked against [PACKAGE_NAME] and [MAX_PACKAGE_LENGTH] before
    * any process exists, and the command is passed as a three-element argument
    * array so no shell parses it. A failed stop is a reply, never an exception,
    * because the process page must survive a stop that Android refuses.
    *
+   * Exit 0 alone is not proof: Android accepts the command and the app can be
+   * restarted by a vendor manager or service. Output on exit 0 is ignored
+   * entirely — some builds print a benign `Force stopping …` line — and the real
+   * proof is a second `ps -A -o PID,RSS,NAME` that must contain no process of
+   * the package ([dev.rsensors.android.core.stillRunningProcesses]). Only a
+   * non-zero exit keeps the `am` output in the reply.
+   *
    * @param packageName package to force-stop; rejected without running
    *   anything when it is empty, longer than 255 characters or not a
    *   dot-separated package name
-   * @return `OK` when `am` exited 0 without printing anything, otherwise
-   *   `ERR exit=<code>` plus the first non-blank output line (≤80 chars), or
+   * @return `OK` when `am` exited 0 and no matching process remained (or when
+   *   the verification `ps` was unavailable, because the page rescans); `ERR
+   *   still running: <up to 3 names>` when a process survived; otherwise
+   *   `ERR exit=<code>` plus the first non-blank `am` line (≤80 chars), or
    *   `ERR <short reason>` when validation or process execution failed
    */
   override fun stopPackage(packageName: String): String {
@@ -195,14 +207,50 @@ class DumpsysUserService : IDumpsysService.Stub {
       // buffer, so waitFor-first would deadlock on a full pipe.
       val output = process.inputStream.bufferedReader().use { it.readText() }
       val exit = process.waitFor()
-      val error = firstUsefulLine(output)
-      val reply = if (exit == 0 && error == null) "OK" else errorLine(exit, error)
+      val reply =
+        if (exit != 0) {
+          errorLine(exit, firstUsefulLine(output))
+        } else {
+          // The output is deliberately dropped on success: it is not evidence.
+          verifiedReply(packageName)
+        }
       Log.i(TAG, "stopPackage end pkg=$packageName exit=$exit reply=$reply")
       reply
     } catch (e: Exception) {
       Log.w(TAG, "stopPackage failed pkg=$packageName", e)
       "ERR " + shortReason(e)
     }
+  }
+
+  /**
+   * Confirms with `ps` that [packageName] has no process left after `am`
+   * exited 0.
+   *
+   * A missing verification table is not a stop failure: the command was
+   * accepted, and the page's rescan is the fallback proof. A table that parses
+   * to zero rows is treated the same way, because `ps` on Android always lists
+   * `init`; an empty parse means the dump was unreadable, not that the system
+   * is empty.
+   *
+   * @return `OK` when nothing matches or verification was unavailable,
+   *   otherwise `ERR still running: <up to 3 names>`; never throws
+   */
+  private fun verifiedReply(packageName: String): String {
+    val remaining = try {
+      val rows = parsePsRss(runPs())
+      if (rows.isEmpty()) {
+        Log.i(TAG, "stopPackage verification unavailable: ps parse empty")
+        return "OK"
+      }
+      stillRunningProcesses(rows, packageName)
+    } catch (e: Exception) {
+      Log.i(TAG, "stopPackage verification unavailable: ${shortReason(e)}")
+      return "OK"
+    }
+    if (remaining.isEmpty()) return "OK"
+    Log.i(TAG, "stopPackage still running pkg=$packageName count=${remaining.size}")
+    return "ERR still running: " +
+      remaining.take(MAX_REPORTED_PROCESSES).joinToString(", ")
   }
 
   /** One measurement plus the layer it came from, or null when idle. */
@@ -330,6 +378,9 @@ class DumpsysUserService : IDumpsysService.Stub {
 
     /** Longest package name Android accepts; anything longer is rejected. */
     private const val MAX_PACKAGE_LENGTH = 255
+
+    /** Most process names named in one `ERR still running: …` reply. */
+    private const val MAX_REPORTED_PROCESSES = 3
 
     /**
      * A package name safe to hand to a privileged process: dot-separated
