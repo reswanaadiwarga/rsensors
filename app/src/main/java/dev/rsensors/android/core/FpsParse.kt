@@ -20,6 +20,11 @@ import java.util.Locale
  * 33002540928274 33002540928274 33002540928274
  * ```
  *
+ * Android 8–14 print bare layer names instead of the Android 15+
+ * `RequestedLayerState{…}` wrapper, and older SurfaceFlinger versions call a
+ * game's render target `SurfaceView - <component>#<id>`. Both shapes are
+ * accepted; see docs/UNIVERSALITY.md for the portability matrix.
+ *
  * A layer's ring is not cleared when drawing stops, so freshness must be judged
  * against a caller-supplied `System.nanoTime()`: an idle app reports 0, never
  * the last burst's rate.
@@ -58,16 +63,23 @@ data class FpsMeasurement(
 /**
  * Reads the focused component from a `dumpsys window` dump.
  *
- * `mFocusedApp` wins; `mCurrentFocus` is the fallback. A leading `.` in the
- * class is expanded against the package, because the layer names use the fully
- * qualified form (`com.android.settings/.MiuiSettings` becomes
+ * `mFocusedApp` wins; `mCurrentFocus` is the fallback. Older Android versions
+ * wrap the focus in `AppWindowToken{…}` or print the record without the typed
+ * wrapper, so a generic `mFocusedApp=… u<id> <pkg>/<class> …` shape is accepted
+ * too; it stays anchored to `mFocusedApp=` so unrelated `mFocusedWindow=` and
+ * `mCurrentFocus=` lines never match. A leading `.` in the class is expanded
+ * against the package, because the layer names use the fully qualified form
+ * (`com.android.settings/.MiuiSettings` becomes
  * `com.android.settings/com.android.settings.MiuiSettings`).
  *
  * @param windowDump full `dumpsys window` stdout
  * @return `<pkg>/<class>` or null when neither focus line is present
  */
 fun parseFocusedComponent(windowDump: String): String? {
-  val match = FOCUSED_APP.find(windowDump) ?: CURRENT_FOCUS.find(windowDump) ?: return null
+  val match = FOCUSED_APP.find(windowDump)
+    ?: FOCUSED_APP_GENERIC.find(windowDump)
+    ?: CURRENT_FOCUS.find(windowDump)
+    ?: return null
   val pkg = match.groupValues[1]
   val cls = match.groupValues[2]
   return if (cls.startsWith(".")) "$pkg/$pkg$cls" else "$pkg/$cls"
@@ -76,41 +88,59 @@ fun parseFocusedComponent(windowDump: String): String? {
 /**
  * Layer names that can carry the focused component's frames.
  *
- * The plain `<component>#<id>` layer draws normal activities; a game draws on a
- * hash-prefixed `SurfaceView[<component>](BLAST)#<id>` layer. Every other
- * `RequestedLayerState` name is a container that returns no frame rows:
- * `ActivityRecord…`, `ActivityRecordInputSink…`, `Background for …`,
- * `Bounds for …`, hash-prefixed containers, and the non-BLAST SurfaceView
- * container.
+ * Accepts both `--list` formats: the Android 15+ `RequestedLayerState{<name>
+ * …}` wrapper and the bare name lines Android 8–14 print. A name may carry a
+ * layer-id prefix (`<hex> <name>`); the prefix is ignored for matching but kept
+ * in the returned name because `--latency` needs the exact layer name.
  *
- * A game can update both its HWUI activity layer and its SurfaceView render
- * layer. The BLAST layer therefore comes first: the resolver takes the first
- * candidate with two fresh frames, so the reported rate is the render rate,
- * and the activity layer is used only when no SurfaceView is fresh
- * (ANDROID.md §8 T14).
+ * Frame-carrying shapes, in preference order:
+ * 1. `SurfaceView[<component>](BLAST)#<id>`, plus the `@0(BLAST)`/`(BLAST)@0`
+ *    spellings some devices print. This is a game's render target.
+ * 2. `SurfaceView - <component>#<id>`, the pre-BLAST render target.
+ * 3. `<component>#<id>`, the activity's own HWUI layer.
  *
- * @param listOutput full `dumpsys SurfaceFlinger --list` stdout
+ * Exact names come before their hash-prefixed twins inside each group. A
+ * hash-prefixed plain name is only a fallback: Android 16 prints the
+ * component's plain layer twice, and the T14 probe (`t14-fps-probe.txt` in
+ * `Rsensors-evidence`) shows the hash-prefixed twin is a container with
+ * `valid=0` while the exact twin carries the frames. So when an exact plain
+ * layer exists, hash-prefixed plain layers are dropped; when none exists they
+ * are kept for Android 17, where all names gain the prefix. BLAST and legacy
+ * SurfaceView layers keep their hash prefix either way because that *is* the
+ * game's render layer.
+ *
+ * The resolver takes the first candidate with two fresh frames, so the render
+ * layer must precede the activity layer: a game whose UI also draws must
+ * report the render rate (ANDROID.md §8 T14). Other `--list` entries are
+ * containers that return no frame rows: `ActivityRecord…`,
+ * `ActivityRecordInputSink…`, `Background for …`, `Bounds for …` and the
+ * non-BLAST `SurfaceView[…]` container.
+ *
+ * @param listOutput full `dumpsys SurfaceFlinger --list` stdout in either format
  * @param component `<pkg>/<class>` from [parseFocusedComponent]
- * @return candidates with the BLAST SurfaceView layer first, then the plain
- *   activity layer; empty when the component has no such layer
+ * @return distinct candidates ordered BLAST, legacy SurfaceView, exact plain,
+ *   then hash-prefixed plain only when no exact plain exists; exact names
+ *   before hash-prefixed ones inside the BLAST/legacy groups
  */
 fun parseCandidateLayers(listOutput: String, component: String): List<String> {
-  val plain = mutableListOf<String>()
-  val blast = mutableListOf<String>()
+  // Two buckets per kind: exact first, then hash-prefixed.
+  val buckets = Array(LayerKind.values().size * 2) { mutableListOf<String>() }
   listOutput.lineSequence().forEach { line ->
-    // Sliced rather than regex-matched: layer names contain braces and spaces,
-    // and Android's ICU regex rejects an unescaped `}`.
-    val trimmed = line.trim()
-    if (!trimmed.startsWith(LAYER_PREFIX) || !trimmed.endsWith("}")) return@forEach
-    val body = trimmed.substring(LAYER_PREFIX.length, trimmed.length - 1)
-    val name = layerName(body) ?: return@forEach
-    if (NON_FRAME_PREFIXES.any { name.startsWith(it) }) return@forEach
-    when {
-      isPlainLayer(name, component) -> plain += name
-      isBlastSurfaceView(name, component) -> blast += name
+    val name = layerNameFromLine(line) ?: return@forEach
+    val layer = splitHashPrefix(name)
+    if (NON_FRAME_PREFIXES.any { layer.displayName.startsWith(it) }) return@forEach
+    val kind = classifyLayer(layer.displayName, component) ?: return@forEach
+    buckets[kind.ordinal * 2 + if (layer.hashPrefixed) 1 else 0] += name
+  }
+  val ordered = buildList {
+    LayerKind.values().forEach { kind ->
+      val exact = buckets[kind.ordinal * 2]
+      addAll(exact)
+      val skipHashFallback = kind == LayerKind.PLAIN && exact.isNotEmpty()
+      if (!skipHashFallback) addAll(buckets[kind.ordinal * 2 + 1])
     }
   }
-  return blast + plain
+  return ordered.distinct()
 }
 
 /**
@@ -118,9 +148,10 @@ fun parseCandidateLayers(listOutput: String, component: String): List<String> {
  *
  * Line 1 is the refresh period and is discarded. Each later row is `desired
  * actual ready` in nanoseconds, tab-separated on the target phone (spaces are
- * accepted too); a row is a real frame only when all three values are in
- * `(0, 1e18)`, which drops the ring's `0 0 0` empty slots and its `INT64_MAX`
- * sentinels.
+ * accepted too). A row is a real frame when `actualPresent` and `frameReady` are
+ * in `(0, 1e18)`; `desiredPresent` may be `0` because some devices report no
+ * scheduled deadline for frames that were still presented. The `0 0 0` ring
+ * slots, the `INT64_MAX` sentinels and short rows are dropped.
  */
 fun parseLatencyRows(latencyOutput: String): List<FrameRow> {
   val rows = ArrayList<FrameRow>()
@@ -130,7 +161,7 @@ fun parseLatencyRows(latencyOutput: String): List<FrameRow> {
     val desired = parts[0].toLongOrNull() ?: return@forEach
     val actual = parts[1].toLongOrNull() ?: return@forEach
     val ready = parts[2].toLongOrNull() ?: return@forEach
-    if (isFrameTimestamp(desired) && isFrameTimestamp(actual) && isFrameTimestamp(ready)) {
+    if (isDesiredTimestamp(desired) && isFrameTimestamp(actual) && isFrameTimestamp(ready)) {
       rows += FrameRow(desired, actual, ready)
     }
   }
@@ -202,9 +233,21 @@ fun formatFpsReply(measurement: FpsMeasurement, layer: String?): String {
   return "OK fps=$fps $frames layer=${layer ?: "-"}"
 }
 
-/** `mFocusedApp=ActivityRecord{<hash> u0 <pkg>/<class> t<n>}`. */
+/** `mFocusedApp=ActivityRecord{<hash> u0 <pkg>/<class> t<n>}` or `AppWindowToken{…}`. */
 private val FOCUSED_APP =
-  Regex("""mFocusedApp=ActivityRecord\{[^}]*?\bu\d+\s+([^\s/{}]+)/([^\s{}]+)""")
+  Regex(
+    """mFocusedApp=(?:ActivityRecord|AppWindowToken)\{[^}]*?\bu\d+\s+([^\s/{}]+)/([^\s{}]+)""",
+  )
+
+/**
+ * Older `mFocusedApp=… u<id> <pkg>/<class> …` records with an untyped or
+ * differently typed wrapper (`WindowToken`, or a bare record).
+ *
+ * Anchored to `mFocusedApp=` and to the `u<id> <pkg>/<class>` shape, so
+ * `mFocusedWindow=` and unrelated lines in the dump never match.
+ */
+private val FOCUSED_APP_GENERIC =
+  Regex("""mFocusedApp=[^\n]*?\bu\d+\s+([^\s/{}]+)/([^\s{}]+)""")
 
 /** `mCurrentFocus=Window{<hash> u0 <pkg>/<class>}`. */
 private val CURRENT_FOCUS =
@@ -221,6 +264,27 @@ private val NON_FRAME_PREFIXES = listOf(
   "Bounds for ",
 )
 
+/** Frame-carrying layer categories, in preference order. */
+private enum class LayerKind { MODERN_BLAST, LEGACY_SURFACE, PLAIN }
+
+/** Suffixes that follow `SurfaceView[<component>]` on a modern render layer. */
+private val BLAST_SUFFIXES = listOf("(BLAST)#", "@0(BLAST)#", "(BLAST)@0#")
+
+/**
+ * Reads one `--list` line as a layer name.
+ *
+ * Android 15+ lines are `RequestedLayerState{<name> <attrs>}`; a malformed
+ * wrapper is skipped rather than mistaken for a name. Any other non-blank line
+ * is an Android 8–14 bare name and is returned whole.
+ */
+private fun layerNameFromLine(line: String): String? {
+  val trimmed = line.trim()
+  if (trimmed.isEmpty()) return null
+  if (!trimmed.startsWith(LAYER_PREFIX)) return trimmed
+  if (!trimmed.endsWith("}")) return null
+  return layerName(trimmed.substring(LAYER_PREFIX.length, trimmed.length - 1))
+}
+
 /**
  * Extracts the layer name from the braces' content.
  *
@@ -234,27 +298,73 @@ private fun layerName(body: String): String? {
   return name.ifEmpty { null }
 }
 
+/**
+ * One layer name split into the part used for matching and whether the line
+ * carried a `<hex> ` layer-id prefix.
+ *
+ * The prefix is ignored for matching but stays in the returned name, because
+ * `--latency` is addressed by the exact name SurfaceFlinger printed.
+ */
+private class ParsedLayerName(val displayName: String, val hashPrefixed: Boolean)
+
+/** Splits an optional `<hex> ` layer-id prefix off [name]. */
+private fun splitHashPrefix(name: String): ParsedLayerName {
+  val space = name.indexOf(' ')
+  if (space <= 0) return ParsedLayerName(name, false)
+  val first = name.substring(0, space)
+  val isHash = first.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+  return if (isHash) ParsedLayerName(name.substring(space + 1), true) else ParsedLayerName(name, false)
+}
+
+/** Classifies [displayName], or null when it is not a frame-carrying layer. */
+private fun classifyLayer(displayName: String, component: String): LayerKind? = when {
+  isBlastSurfaceView(displayName, component) -> LayerKind.MODERN_BLAST
+  isLegacySurfaceView(displayName, component) -> LayerKind.LEGACY_SURFACE
+  isPlainLayer(displayName, component) -> LayerKind.PLAIN
+  else -> null
+}
+
 /** True for the exact `<component>#<digits>` layer. */
 private fun isPlainLayer(name: String, component: String): Boolean {
   val prefix = "$component#"
-  if (!name.startsWith(prefix)) return false
-  val tail = name.substring(prefix.length)
-  return tail.isNotEmpty() && tail.all { it.isDigit() }
+  return name.startsWith(prefix) && isLayerId(name.substring(prefix.length))
 }
 
-/** True for `SurfaceView[<component>](BLAST)#<digits>`, with or without a hash. */
+/** True for the pre-BLAST `SurfaceView - <component>#<digits>` render layer. */
+private fun isLegacySurfaceView(name: String, component: String): Boolean {
+  val prefix = "SurfaceView - $component#"
+  return name.startsWith(prefix) && isLayerId(name.substring(prefix.length))
+}
+
+/**
+ * True for `SurfaceView[<component>](BLAST)#<digits>` and the `@0` spellings.
+ * The non-BLAST `SurfaceView[<component>]#<id>` container does not match.
+ */
 private fun isBlastSurfaceView(name: String, component: String): Boolean {
-  val marker = "SurfaceView[$component](BLAST)#"
-  val index = name.indexOf(marker)
-  if (index < 0) return false
-  val tail = name.substring(index + marker.length)
-  if (tail.isEmpty() || !tail.all { it.isDigit() }) return false
-  if (index == 0) return true
-  val prefix = name.substring(0, index)
-  return prefix.endsWith(' ') &&
-    prefix.dropLast(1).isNotEmpty() &&
-    prefix.dropLast(1).all { it in '0'..'9' || it in 'a'..'f' }
+  val base = "SurfaceView[$component]"
+  if (!name.startsWith(base)) return false
+  val rest = name.substring(base.length)
+  return BLAST_SUFFIXES.any { suffix ->
+    rest.startsWith(suffix) && isLayerId(rest.substring(suffix.length))
+  }
 }
 
+private fun isLayerId(value: String): Boolean =
+  value.isNotEmpty() && value.all { it in '0'..'9' }
+
+/**
+ * A present/ready timestamp must be inside the CLOCK_MONOTONIC range; `0` is an
+ * unused ring slot and `INT64_MAX` is the end-of-ring sentinel.
+ */
 private fun isFrameTimestamp(value: Long): Boolean =
-  value > 0L && value < 1_000_000_000_000_000_000L
+  value > 0L && value < TIMESTAMP_LIMIT
+
+/**
+ * `desiredPresentTime` may legitimately be `0` when the frame was presented
+ * without a scheduled deadline; only the sentinel and negative values are not
+ * frames.
+ */
+private fun isDesiredTimestamp(value: Long): Boolean =
+  value >= 0L && value < TIMESTAMP_LIMIT
+
+private const val TIMESTAMP_LIMIT = 1_000_000_000_000_000_000L

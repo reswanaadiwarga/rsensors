@@ -70,7 +70,9 @@ class FpsParseTest {
   }
 
   @Test
-  fun `candidate layers keep only the plain layer and skip containers`() {
+  fun `candidate layers keep the plain layer and skip containers`() {
+    // The hash-prefixed twin (#5342) is an Android 16 container with valid=0
+    // when the exact plain layer exists, so it must not be a candidate.
     assertEquals(
       listOf("com.android.settings/com.android.settings.MiuiSettings#5643"),
       parseCandidateLayers(settingsList, settingsComponent),
@@ -120,6 +122,169 @@ class FpsParseTest {
     assertEquals(2, candidates.size)
     assertTrue(candidates.none { it.endsWith("GameActivity#5726") })
     assertTrue(candidates.none { it.endsWith("GameActivity#5733") })
+  }
+
+  @Test
+  fun `focused component reads an AppWindowToken focus line`() {
+    val dump = "mFocusedApp=AppWindowToken{9f4e2b1 token=Token{7a1 " +
+      "ActivityRecord{abc u0 com.example.app/.Main t12}}}"
+
+    assertEquals("com.example.app/com.example.app.Main", parseFocusedComponent(dump))
+  }
+
+  @Test
+  fun `focused component reads a generic mFocusedApp token line`() {
+    val dump = "mFocusedApp=WindowToken{4d2 u0 com.example.app/.Main t7}"
+
+    assertEquals("com.example.app/com.example.app.Main", parseFocusedComponent(dump))
+  }
+
+  @Test
+  fun `focused component does not match unrelated focus lines`() {
+    assertNull(parseFocusedComponent("mFocusedWindow=Window{1 u0 com.example/.Main}"))
+    assertNull(parseFocusedComponent("mFocusedApp=null"))
+  }
+
+  @Test
+  fun `focused component reads a plain legacy focus line`() {
+    // Android 8 prints `AppWindowToken{hash token=Token{hash ActivityRecord{...}}}`;
+    // older dumps are just `mFocusedApp=... u<id> pkg/cls ...`.
+    val dump = "mFocusedApp=AppWindowToken{3f1 u0 com.example.app/com.example.app.Main t9}"
+
+    assertEquals("com.example.app/com.example.app.Main", parseFocusedComponent(dump))
+  }
+
+  @Test
+  fun `a plain layer list line resolves the focused component`() {
+    val dump = listOf(
+      "SurfaceView[$settingsComponent]#1",
+      settingsComponent + "#5643",
+      "Background for $settingsComponent#5646",
+    ).joinToString("\n")
+
+    assertEquals(
+      listOf("com.android.settings/com.android.settings.MiuiSettings#5643"),
+      parseCandidateLayers(dump, settingsComponent),
+    )
+  }
+
+  @Test
+  fun `a plain legacy SurfaceView layer is preferred over the plain layer`() {
+    val dump = listOf(
+      gameComponent + "#5729",
+      "SurfaceView - $gameComponent#5735",
+    ).joinToString("\n")
+
+    assertEquals(
+      listOf(
+        "SurfaceView - $gameComponent#5735",
+        gameComponent + "#5729",
+      ),
+      parseCandidateLayers(dump, gameComponent),
+    )
+  }
+
+  @Test
+  fun `hash prefixed BLAST resolves before the exact plain layer`() {
+    // The hash-prefixed BLAST layer is the game's real render target and stays
+    // a candidate, but the hash-prefixed plain twin is a container here.
+    val dump = listOf(
+      "cc6d380 $gameComponent#5726",
+      "89e2605 SurfaceView[$gameComponent](BLAST)#5734",
+      gameComponent + "#5729",
+    ).joinToString("\n")
+
+    assertEquals(
+      listOf(
+        "89e2605 SurfaceView[$gameComponent](BLAST)#5734",
+        gameComponent + "#5729",
+      ),
+      parseCandidateLayers(dump, gameComponent),
+    )
+  }
+
+  @Test
+  fun `hash prefixed plain layer is the fallback when no exact plain layer exists`() {
+    // Android 17 prefixes every name; without an exact plain twin the prefixed
+    // layer is the only activity-layer candidate.
+    val dump = listOf(
+      "89e2605 SurfaceView[$gameComponent](BLAST)#5734",
+      "cc6d380 $gameComponent#5726",
+    ).joinToString("\n")
+
+    assertEquals(
+      listOf(
+        "89e2605 SurfaceView[$gameComponent](BLAST)#5734",
+        "cc6d380 $gameComponent#5726",
+      ),
+      parseCandidateLayers(dump, gameComponent),
+    )
+  }
+
+  @Test
+  fun `both BLAST at zero orderings resolve`() {
+    val dump = listOf(
+      "SurfaceView[$gameComponent]@0(BLAST)#5734",
+      "SurfaceView[$gameComponent](BLAST)@0#5735",
+    ).joinToString("\n")
+
+    assertEquals(
+      listOf(
+        "SurfaceView[$gameComponent]@0(BLAST)#5734",
+        "SurfaceView[$gameComponent](BLAST)@0#5735",
+      ),
+      parseCandidateLayers(dump, gameComponent),
+    )
+  }
+
+  @Test
+  fun `plain layer lists reject containers the non-BLAST SurfaceView and other components`() {
+    val dump = listOf(
+      "ActivityRecord{1a2b3c u0 $gameComponent t5643}#5644",
+      "ActivityRecordInputSink $gameComponent#5645",
+      "Background for $gameComponent#5646",
+      "Bounds for $gameComponent#5647",
+      "SurfaceView[$gameComponent]#5733",
+      "unrelated.pkg/unrelated.pkg.Activity#2",
+      gameComponent + "#5729",
+    ).joinToString("\n")
+
+    assertEquals(listOf(gameComponent + "#5729"), parseCandidateLayers(dump, gameComponent))
+  }
+
+  @Test
+  fun `identical layer names are deduplicated`() {
+    val dump = listOf(gameComponent + "#5729", gameComponent + "#5729").joinToString("\n")
+
+    assertEquals(listOf(gameComponent + "#5729"), parseCandidateLayers(dump, gameComponent))
+  }
+
+  @Test
+  fun `latency parsing keeps a zero desired present with valid actual and ready`() {
+    // Some devices report `desiredPresentTime = 0` for frames that were still
+    // presented; only actual and ready decide whether a row is a frame.
+    val text = "16666667\n" +
+      "0 100 200\n"
+
+    assertEquals(listOf(FrameRow(0L, 100L, 200L)), parseLatencyRows(text))
+  }
+
+  @Test
+  fun `latency parsing rejects a zero actual or ready`() {
+    val text = "16666667\n" +
+      "10 0 30\n" +
+      "10 20 0\n" +
+      "10 20 30\n"
+
+    assertEquals(listOf(FrameRow(10L, 20L, 30L)), parseLatencyRows(text))
+  }
+
+  @Test
+  fun `latency parsing rejects a desired sentinel`() {
+    val text = "16666667\n" +
+      "9223372036854775807 20 30\n"
+
+    assertEquals(emptyList<FrameRow>(), parseLatencyRows(text))
   }
 
   @Test

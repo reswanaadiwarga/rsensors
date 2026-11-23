@@ -552,19 +552,31 @@ gets); full log in `input/t14-fps-probe.txt` of the app project.
 
 Confirmed rules:
 
-- `dumpsys window` carries `mFocusedApp=ActivityRecord{… u0 <pkg>/<class> t<n>}`.
-  A leading `.` in the class is expanded against the package
-  (`com.android.settings/.MiuiSettings` becomes
+- `dumpsys window` carries `mFocusedApp=ActivityRecord{… u0 <pkg>/<class> t<n>}`;
+  older dumps use `AppWindowToken{…}` or a generic `mFocusedApp=… u<id>
+  <pkg>/<class> …` record. A leading `.` in the class is expanded against the
+  package (`com.android.settings/.MiuiSettings` becomes
   `com.android.settings/com.android.settings.MiuiSettings`).
-- `dumpsys SurfaceFlinger --list` prints `RequestedLayerState{<name> …}`.
-  Candidates for a component are the plain `<component>#<id>` layer and any
-  `SurfaceView[<component>]…` layer. The `<hash> <component>#<id>` container,
-  `ActivityRecord…`, `ActivityRecordInputSink…`, `Background for …` and the
-  non-BLAST SurfaceView container return no frames and are skipped.
+- `dumpsys SurfaceFlinger --list` prints `RequestedLayerState{<name> …}` on
+  Android 15+ and a bare `<name>` line on Android 8–14; both are parsed. A name
+  may start with a `<hex> ` layer-id prefix, which is ignored for matching but
+  kept in the returned name because `--latency` takes the exact name.
+  Candidates are `SurfaceView[<component>](BLAST)#<id>` (including
+  `@0(BLAST)`/`(BLAST)@0`), `SurfaceView - <component>#<id>` and the plain
+  `<component>#<id>` layer, in that order; hash-prefixed BLAST/legacy layers
+  stay candidates, exact names before hash-prefixed ones. A hash-prefixed plain
+  layer is only a fallback: on Android 16 the probe's `9ecc164 …#5342` and
+  `cc6d380 …#5726` are containers with `valid=0` while the exact `#5643` /
+  `#5729` carry the frames, so it is dropped when an exact plain twin exists
+  and kept when none does (Android 17 prefixes every name). `ActivityRecord…`,
+  `ActivityRecordInputSink…`, `Background for …`, `Bounds for …` and the
+  non-BLAST `SurfaceView[<component>]#<id>` container return no frames and are
+  skipped.
 - `dumpsys SurfaceFlinger --latency '<layer>'` returns the refresh period on
   line 1 and up to 127 rows of `desiredPresent actualPresent frameReady` in
   CLOCK_MONOTONIC nanoseconds (tab-separated on the target; spaces are accepted
-  too). Rows with a value `<= 0` or `>= 1e18` are not frames.
+  too). Rows with `actualPresent` or `frameReady` `<= 0` or `>= 1e18` are not
+  frames; `desiredPresentTime` may be `0`.
 - The ring is **not** cleared when drawing stops: the newest timestamp freezes
   and an idle screen would report its last burst forever (probe: 120 fps,
   frozen). Freshness must be judged against `System.nanoTime()`, the same
@@ -579,8 +591,8 @@ Confirmed rules:
 - 1.5 s window at the 2 s expanded poll (5 s collapsed). The value is the
   foreground app's frame rate; the overlay's own frames are never counted.
 - Candidate preference: a fresh `SurfaceView[...](BLAST)` layer wins (that is
-  the game's render target); the activity layer is used only when no SurfaceView
-  has two fresh frames. A game whose UI layer also draws must not report the UI
+  the game's render target), then a legacy `SurfaceView - …` render layer, then
+  the activity layer. A game whose UI layer also draws must not report the UI
   rate instead of the render rate.
 
 Shell-side reply (one line, parsed by the app):
