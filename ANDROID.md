@@ -552,12 +552,13 @@ the per-feature Diagnostics status table before the universality work.
 | T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
 | T19d-1 ✅ | Brand-aware setup guidance | New pure `core/OemGuidance.kt`: `oemFamily(Build.MANUFACTURER, Build.BRAND)` checks the manufacturer before the brand, ignores case and surrounding spaces, and maps Xiaomi/Redmi/POCO, Samsung, Huawei/HONOR, Oppo/OnePlus/Realme/ColorOS, vivo/iQOO and stock-like makers (Google/AOSP/Motorola/Sony/Asus/Nothing) to a family; unknown, blank and `null` fall back to `OTHER`. The main screen's "At boot" paragraph and the guide's "After a reboot" note now show the family copy instead of HyperOS-only text, and the XIAOMI copy keeps the original HyperOS wording. README gains a compatibility-notes table. 387 tests; no device. Real OEM setting labels and behaviour remain device-unverified, and HarmonyOS NEXT cannot run Android APKs. |
 | T19d-2 ✅ | Manual Manage apps fallback | Tier 0 escape hatch for phones without the Shizuku shell route: an `OutlinedButton` labelled `Manage apps` on the main screen opens Android's app list, where the user opens an app's info page and taps `Force stop` by hand. API 29+ launches `Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS` and falls back to `Settings.ACTION_APPLICATION_SETTINGS` when that launch throws; both attempts are guarded, so a missing Settings activity cannot crash the app. The copy states that Android asks for confirmation and Rsensors cannot verify or undo the stop, and no code reads a result. No new permission, no `QUERY_ALL_PACKAGES`, no package list, and no Shizuku/shell/process-page change. UI-only; 393 tests unchanged. Device-checked on the target: the intent opened HyperOS's `Apps` screen (`com.miui.securitycenter/.appmanager.AppManagerMainActivity`), Back returned to the main screen without a crash, and logcat showed no FATAL/ANR. The vendor may substitute the settings activity; still not a universal or device-verified claim for other phones. |
+| T19e-1 ✅ | Verification matrix | Adds `docs/VERIFICATION.md`: current target/Shizuku environment, gates, feature × no-shell/Shizuku × device evidence, and the explicit not-verified list (Android 8–14/17 formats, OEMs, second device, HAL/sysfs, shell fallbacks, high-refresh rendering). Links it from README. No code change; device claims remain target-only. |
 
-T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19c-1/T19c-2/T19d-1
-slices are complete in code on `main`. T17/T18/T19a are ancestors of `main` from
-their feature branches; record, snap, all four T19b slices, both T19c slices and
-T19d-1/T19d-2 are merged.
-Nothing is pushed.
+T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19b-5/T19c-1/T19c-2/
+T19d-1/T19d-2/T19e-1 slices are complete in code on `main`. T17/T18/T19a are
+ancestors of `main` from their feature branches; record, snap, all five T19b
+slices, both T19c slices, both T19d slices and T19e-1 are merged. Nothing is
+pushed.
 
 ### T19d-2 manual Manage apps (2026-11-24)
 

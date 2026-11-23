@@ -181,7 +181,8 @@ The internal design and task log is [ANDROID.md](ANDROID.md); source comments
 cite its sections.
 
 See [docs/BUILDING.md](docs/BUILDING.md) for signing, R8 and the release
-details.
+details, and [docs/VERIFICATION.md](docs/VERIFICATION.md) for what is actually
+verified on this phone versus what remains untested.
 
 ## Release
 
