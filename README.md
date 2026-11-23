@@ -133,8 +133,9 @@ is not a claim that every Android 8+ phone exposes every measurement.
 1. Download the APK from [Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)
    and install it with `adb install` or a file manager.
 2. Open Rsensors and grant **Display over other apps** and **Notifications**.
-3. Install and start [Shizuku](https://shizuku.rikka.app/), then grant Rsensors
-   the Shizuku permission.
+3. Install and start [Shizuku](https://shizuku.rikka.app/). Allow Shizuku to send
+   notifications: the pairing code is entered in its notification. Then grant
+   Rsensors the Shizuku permission.
 4. Tap **Start monitoring**. The pill appears; the expanded card is one tap.
 5. For the detailed Shizuku flow, open **Shizuku setup guide** in the app.
 

@@ -696,15 +696,21 @@ private class GuideSection(
   val linkUrl: String? = null,
 )
 
-/** Step (a): install, enable, pair once, start, grant. */
+/** Step (a): install, allow notifications, enable, pair once, start, grant. */
 private val FIRST_TIME_STEPS = listOf(
   "Install Shizuku from the Play Store. Open it once.",
+  "Allow Shizuku to send notifications. Android 13+ asks; older versions are on " +
+    "by default. The pairing code is entered in a Shizuku notification, so pairing " +
+    "cannot finish if notifications are blocked. If you denied it, open Settings " +
+    "\u2192 Apps \u2192 Shizuku \u2192 Notifications and allow them.",
   "Turn on Developer options: Settings \u2192 About phone \u2192 tap Build number 7 " +
     "times. Developer options appears in Settings.",
   "Turn on Wireless debugging: Developer options \u2192 Wireless debugging \u2192 On. " +
     "Choose \u201cAlways allow on this network\u201d when asked.",
   "Pair Shizuku: open Shizuku \u2192 Pairing. In Wireless debugging, tap \u201cPair " +
-    "device with pairing code\u201d and type the code into the Shizuku notification.",
+    "device with pairing code\u201d. Shizuku posts a notification; open it and type " +
+    "the code there. If no notification appears, check the notification permission " +
+    "in step 2.",
   "Wait until Shizuku says pairing succeeded. Press Start in Shizuku; the screen " +
     "reads \u201cShizuku is running\u201d when the server is up.",
   "Return to Rsensors and tap \u201cGrant Shizuku permission\u201d. The Shizuku " +
