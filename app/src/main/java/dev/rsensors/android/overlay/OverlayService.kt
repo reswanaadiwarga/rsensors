@@ -81,7 +81,9 @@ import rikka.shizuku.Shizuku
  * T12 adds recording: [ACTION_RECORD_START] opens a CSV session on the worker
  * and [ACTION_RECORD_STOP] flushes and closes it. The recorder lives and dies
  * with the poller, so screen-off pausing leaves the gap the session graph shows
- * (§3, §9); [onDestroy] closes it like an explicit stop.
+ * (§3, §9); [onDestroy] closes it like an explicit stop. The expanded card's
+ * record toggle posts the same start/stop calls to the worker, so a session can
+ * be started or stopped without opening the main app.
  *
  * T14 adds the foreground FPS: each device-mode poll also asks the shared
  * Shizuku runner for one SurfaceFlinger measurement and copies a non-null value
@@ -779,6 +781,17 @@ class OverlayService : Service() {
       // Same exit path as the notification's Stop action: onDestroy removes the
       // window, flushes the recorder and clears ReadingStore (ANDROID.md §9).
       stopSelf()
+    }
+
+    override fun onRecordToggle() {
+      // Read the ambient state on the main thread at tap time, matching the
+      // label the user just saw. Deciding inside the queued runnable would let
+      // a fast double-tap queue stop then start and immediately open a new
+      // session; the worker still owns the recorder itself.
+      val stop = isRecording
+      workerHandler?.post {
+        if (stop) stopRecordingOnWorker() else startRecordingOnWorker()
+      }
     }
 
     override fun onStartShizuku() {

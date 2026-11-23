@@ -98,6 +98,10 @@ be opened or deleted. Deletion is permanent and confirmed.
 - The session graph is a Compose Canvas: shared temperature scale, a separate
   0–120 FPS axis, a legend that dims/restacks series, and a crosshair tooltip.
 - The card's 2-minute graph and min/max ranges use the same in-memory history.
+- The expanded card has a full-width `Record session` / `Stop recording` toggle.
+  It posts to the same recorder worker as the main-screen Record switch, so the
+  CSV format and start/stop semantics are identical; the label and
+  accessibility description come from `core/RecordingControl.kt`.
 
 ## Diagnostics
 

@@ -4,14 +4,16 @@ Development design and task log. Public overview: [README.md](README.md);
 architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
-Status: **T0-T19a complete in code.** The RAM pill, process-memory page and Stop
-app are committed on `feat/stop-app` (T17 is on the parent `feat/process-ram`)
-and installed/device-verified on the target (**280 tests** at T18). T19a adds
-the Diagnostics feature-status table on `feat/t19a-diagnostics` (**299 tests**,
-160 independent acceptance checks); its device checks are pending because the
-phone is not connected. The 0.2.0 release remains the published baseline and
-does not include these changes; nothing is merged or pushed yet. This file is
-the source of truth for the app; change it before changing code.
+Status: **T0-T19a plus the overlay record toggle, complete in code.** The RAM
+pill, process-memory page and Stop app are committed on `feat/stop-app` (T17 is
+on the parent `feat/process-ram`) and installed/device-verified on the target
+(**280 tests** at T18). T19a adds the Diagnostics feature-status table on
+`feat/t19a-diagnostics` (**299 tests**, 160 independent acceptance checks;
+device-verified 2026-11-23 with caveats). The expanded card's Record session /
+Stop recording toggle adds 3 tests (**302 total**) on `feat/record-overlay`;
+its device check is pending. The 0.2.0 release remains the published baseline
+and does not include these changes; nothing is merged or pushed yet. This file
+is the source of truth for the app; change it before changing code.
 
 ## 1. Goal
 
@@ -98,7 +100,8 @@ nice-to-haves:
 - **Expanded card** (tap): individual CPU, GPU and battery rows, each with its
   current value and the 2-minute `max`/`min`; thermal status, the FPS, a system
   RAM row (`used / total` in one-decimal GB) with a compact usage bar under it,
-  Refresh, Diagnostics, Stop monitoring (formerly "Stop overlay"), and a
+  Refresh, Diagnostics, a full-width Record session / Stop recording toggle,
+  Stop monitoring (formerly "Stop overlay"), and a
   2-minute sparkline tagged `GRAPH · 2 MIN` with a cycle
   button selecting CPU+GPU / CPU / GPU / BAT / FPS (battery in blue, FPS in
   purple on a fixed 0–120 scale).
@@ -136,11 +139,14 @@ nice-to-haves:
   UserService with `dumpsys SurfaceFlinger --list/--latency` for the top
   activity's layer — never the overlay's own frames. Without Shizuku the value
   is `—`. Colours: below 30 red, below 50 amber, otherwise green.
-- **Recording**: a Record switch starts a session; every poll appends one CSV
-  row including the FPS (time, CPU/max, cores, GPU/hot, battery, thermal
-  status, board temps, source, FPS). Stop or overlay stop flushes and closes
-  the file. Screen-off pauses polling, so a recording has a gap while the phone
-  sleeps; that gap is visible in the graph.
+- **Recording**: a Record switch on the main screen or the expanded card's
+  Record session / Stop recording toggle starts a session; every poll appends
+  one CSV row including the FPS (time, CPU/max, cores, GPU/hot, battery,
+  thermal status, board temps, source, FPS). Stop or overlay stop flushes and
+  closes the file. Screen-off pauses polling, so a recording has a gap while
+  the phone sleeps; that gap is visible in the graph. The card toggle posts to
+  the same worker and uses the same recorder, so CSV format and behaviour do
+  not depend on where it was started.
 - **Shizuku help**: a dedicated setup/troubleshooting screen with live status
   (installed/running/permission/version, wireless debugging if readable). The
   topics are collapsible cards — First-time setup, Start keeps searching,
@@ -466,7 +472,7 @@ the per-feature Diagnostics status table before the universality work.
 | T16 ✅ | Release 0.2.0 | Installed and device-verified: versionCode 2 / 0.2.0, R8 + shrinking, 1,105,888 B, SHA-256 `4232C96E…EA0023`, v2 debug-signed. The Shizuku UserService/FPS path survives R8, the pill/card/guide/session graph/notification work, recording is v2, and the degraded `CPU/GPU — BAT 36° FPS —` prompt plus `Shizuku help` action recover after a server restart. 214 tests. |
 | T17 ✅ | Process memory page | RAM row opens a second page in the expanded card; `dumpsys meminfo --oom` PSS parsed shell-side; `Apps` groups by package and hides `Native`/`System`, `Processes` shows every row; 8 per page with prev/next; `Back`/`Refresh`; on-open + manual scans only; card 280 dp and restores 220 dp on back; no new permissions; unavailable state without Shizuku and in demo mode; parser fixtures; the pill keeps polling during a scan; 250 tests; device-verified: Apps 82 / Processes 270 rows sorted by PSS, pager `1–8`/`9–16`, Refresh scans, no-Shizuku state + Start Shizuku, recovery after `start.sh`, and the header keeps all four metrics + dot (10 sp card / 12 sp page) |
 | T18 ✅ | Stop app | Tap-select a process/app row with a highlight and selection bar; Stop always confirms; Apps and Processes both supported (Processes says Stop app and warns the whole package stops; native protected); tiered `StopPolicy` — protected: self, Shizuku, native/no package, UID < 10000, core denylist, persistent, Native/System/Persistent/Persistent Service; warning: system/updated-system/privileged including AICore, foreground/visible, launcher, IME, GMS; normal: cached/background; `am force-stop <validated package>` through Shizuku AIDL version 5, no raw kill; one rescan after a stop; 280 tests; device-verified: AICore selected as `WARNING · On-device AI…`, confirmed `Stop AICore?`, `stopPackage … exit=0 reply=OK`, AICore pid gone, one rescan 266 rows, RAM 8.7G→7.1G, poll still running; protected `system` row showed a padlock + `PROTECTED · Core system process.` with no Stop; warning/protected bars show the package on its own line; Cancel restored the footer; Processes warning row showed the `Stop app` label; no crash; warning confirmation shows the full package + reason + `This stops every process of the app.` with no truncation |
-| T19a ✅ | Diagnostics feature status | "Feature status" table above the snapshot: eight rows (battery, thermal status, CPU/GPU, board, FPS, RAM, process memory, Stop app), each with state, source and exact reason; precedence demo → Shizuku installed/running/permission → overlay → probe/value; battery/thermal/RAM stay tier 0; FPS probe every poll and meminfo/stop last-attempt probes with `shellBlocked` recovery clearing; cancelled scans/stops get terminal states; no new permissions, dependencies or measurement behaviour; 299 tests; 160 independent acceptance checks; device verification pending (phone not connected) |
+| T19a ✅ | Diagnostics feature status | "Feature status" table above the snapshot: eight rows (battery, thermal status, CPU/GPU, board, FPS, RAM, process memory, Stop app), each with state, source and exact reason; precedence demo → Shizuku installed/running/permission → overlay → probe/value; battery/thermal/RAM stay tier 0; FPS probe every poll and meminfo/stop last-attempt probes with `shellBlocked` recovery clearing; cancelled scans/stops get terminal states; no new permissions, dependencies or measurement behaviour; 299 tests; 160 independent acceptance checks; device-verified 2026-11-23 with caveats (Shizuku-down/recovery and the protected-stop UI path were not forced) |
 
 T0-T19a are complete in code. T17 is committed on `feat/process-ram`; T18 is
 stacked on `feat/stop-app`; T19a is stacked on `feat/t19a-diagnostics`; nothing

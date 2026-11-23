@@ -38,6 +38,7 @@ import dev.rsensors.android.core.fmtRam
 import dev.rsensors.android.core.fmtTemp
 import dev.rsensors.android.core.fpsLevel
 import dev.rsensors.android.core.level
+import dev.rsensors.android.core.recordingControl
 import dev.rsensors.android.core.thermalLevel
 import dev.rsensors.android.core.valueRange
 import dev.rsensors.android.ui.Palette
@@ -58,9 +59,10 @@ import kotlin.math.abs
  *   a system RAM row with a usage bar, the per-core line, an optional board
  *   line, the `GRAPH · 2 MIN` sparkline
  *   with its own series selector, the CPU/GPU / BAT / FPS / RAM chips and
- *   Refresh / Diagnostics / Stop monitoring buttons (ANDROID.md §3, §8 T7, T15,
- *   T15b, T15i). The wordy source/age row is gone: the source lives in
- *   Diagnostics.
+ *   Refresh / Diagnostics / Stop monitoring buttons, plus a full-width Record
+ *   session / Stop recording toggle that drives the same recorder as the main
+ *   screen without leaving the overlay (ANDROID.md §3, §8 T7, T15, T15b, T15i).
+ *   The wordy source/age row is gone: the source lives in Diagnostics.
  *   The chips drive the pill and notification only; the graph selector is
  *   independent of them.
  * - Tap toggles the card, long-press opens the app, drag moves the window and
@@ -108,6 +110,12 @@ class OverlayView(
 
     /** The card's Stop monitoring button was pressed. */
     fun onStopOverlay()
+
+    /**
+     * The card's record-session toggle was pressed. The service starts a
+     * session when none is running and stops the current one otherwise.
+     */
+    fun onRecordToggle()
 
     /** The card's Start Shizuku button was pressed (server down, T15g). */
     fun onStartShizuku()
@@ -233,6 +241,20 @@ class OverlayView(
   }
 
   /**
+   * Starts or stops a recording session from the card. Its label and content
+   * description follow [recordingControl], so the button always names what the
+   * next tap does.
+   */
+  private val recordButton = makeButton(recordingControl(false).label) {
+    callbacks.onRecordToggle()
+  }.apply {
+    contentDescription = recordingControl(false).description
+  }
+
+  /** Full-width record-session toggle row, below the Start Shizuku row. */
+  private val recordRow = makeRecordRow()
+
+  /**
    * Last Shizuku state the service reported. Starts true, i.e. hidden, so the
    * card never claims the server is down before it has been checked.
    */
@@ -267,7 +289,10 @@ class OverlayView(
   /** Last 2-minute window, kept so the description can repeat the card's ranges. */
   private var lastHistory: List<Reading> = emptyList()
 
-  /** True while the service records a session; draws the red REC marker. */
+  /**
+   * True while the service records a session; draws the red REC marker and
+   * switches [recordButton] to `Stop recording`.
+   */
   private var recording = false
 
   private val longPressRunnable = Runnable {
@@ -316,13 +341,20 @@ class OverlayView(
   }
 
   /**
-   * Shows or hides the small red REC marker in the pill (ANDROID.md §3).
+   * Shows or hides the small red REC marker in the pill (ANDROID.md §3) and
+   * relabels the card's record toggle.
    *
    * Main thread only, like the rest of the view. The strip is re-rendered from
    * the cached last reading so the marker appears in the same frame as the
-   * toggle instead of waiting for the next poll.
+   * toggle instead of waiting for the next poll. The button is relabelled even
+   * when [recording] is unchanged, because a stop request clears the state on
+   * the main thread before the worker has closed the file: the label must never
+   * describe an action the next tap will not perform.
    */
   fun setRecording(recording: Boolean) {
+    val control = recordingControl(recording)
+    recordButton.text = control.label
+    recordButton.contentDescription = control.description
     if (this.recording == recording) return
     this.recording = recording
     renderPill()
@@ -763,6 +795,7 @@ class OverlayView(
     homePage.addView(makeChipRow())
     homePage.addView(makeActionRow())
     homePage.addView(startShizukuRow)
+    homePage.addView(recordRow)
     homePage.addView(makeStopRow())
 
     card.addView(homePage)
@@ -863,6 +896,23 @@ class OverlayView(
     }
 
   /**
+   * The record-session toggle gets a full-width row like Stop monitoring, so it
+   * is reachable from the card without opening the main app. It only ever
+   * joins [homePage]; the process page keeps its own actions (T17).
+   */
+  private fun makeRecordRow(): LinearLayout =
+    LinearLayout(context).apply {
+      orientation = HORIZONTAL
+      addView(
+        recordButton,
+        LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+      )
+      layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+        topMargin = dp(BUTTON_GAP_DP)
+      }
+    }
+
+  /**
    * One `LABEL  value detail` row.
    *
    * @param label fixed left-hand caption, dimmed
@@ -910,9 +960,10 @@ class OverlayView(
   /**
    * A compact card action button.
    *
-   * Shared by Refresh, Diagnostics and Stop monitoring so they read as one control
-   * strip. Focusable and clickable for accessibility even though the overlay
-   * window is not focusable, matching the card's touch behaviour.
+   * Shared by Refresh, Diagnostics, Stop monitoring and the record-session
+   * toggle so they read as one control strip. Focusable and clickable for
+   * accessibility even though the overlay window is not focusable, matching the
+   * card's touch behaviour.
    *
    * @param text visible label and content description
    * @param onClick invoked on a tap; the service decides what the action means
