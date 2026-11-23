@@ -22,4 +22,18 @@ interface MeminfoRunner {
    *   binder)
    */
   fun runMeminfo(): String?
+
+  /**
+   * Runs one `ps -A -o PID,UID,NAME` read in the shell-side UserService
+   * (T19c-3a).
+   *
+   * Called alongside [runMeminfo] on the same scan thread. The page parses it
+   * with [dev.rsensors.android.core.parsePsUid] and attaches UIDs to the memory
+   * rows, so a hidden core process is protected by UID.
+   *
+   * @return raw `ps` UID table stdout, or null when Shizuku/the binder/the shell
+   *   command failed; a null UID table leaves the snapshot's UIDs null and the
+   *   scan continues
+   */
+  fun runProcessUids(): String?
 }

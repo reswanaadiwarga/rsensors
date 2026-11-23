@@ -10,13 +10,11 @@ per-feature state, source and reason.
 ## Current environment
 
 - Target: POCO X7 Pro (2412DPC0AG), Android 16 / HyperOS 3.
-- Shizuku historically verified: **13.5.4** (`versionCode 1049`).
-- Current Shizuku on the target: **13.6.0.r1091**, whose UserService fails with
-  `LoadedApk.makeApplicationInner` on this HyperOS/MediaTek build. CPU/GPU, FPS,
-  process memory and Stop therefore cannot use the normal shell transport right
-  now. Reinstall a full 13.5.4 APK (the split install cannot restart) and re-pair.
-- 13.6.0 itself supports Android 16 QPR1; the failure is specific to this
-  HyperOS/MediaTek UserService path, not Android 16 generally.
+- Current Shizuku: **13.5.4** (`13.5.4.r1049.0e53409`), restored from the official
+  GitHub release; server running and Rsensors permission granted.
+- Shizuku 13.6.0 itself supports Android 16 QPR1, but its UserService fails with
+  `LoadedApk.makeApplicationInner` on this HyperOS/MediaTek build. The guide
+  explains the uninstall/reinstall/re-pair path to 13.5.4.
 
 ## Gates
 
@@ -28,7 +26,7 @@ gradlew.bat :app:lintDebug
 gradlew.bat :app:assembleDebug
 ```
 
-Latest result: **393 JVM tests, 33 suites, 0 failures/errors/skipped**; lint and
+Latest result: **401 JVM tests, 33 suites, 0 failures/errors/skipped**; lint and
 assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 
 ## Feature matrix
@@ -41,10 +39,10 @@ assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 | Overlay, pill, card, recording, sessions, snap toggle, Record toggle | Yes | — | Verified on target |
 | Diagnostics feature status | Yes | — | Verified on target (forced-RSS shim for the RSS path) |
 | OEM autostart/Shizuku guidance, Manage apps fallback | Yes | — | Guidance is code/UI reviewed; Manage apps opened the HyperOS app list and returned without a crash |
-| CPU/GPU temperatures | No | `dumpsys thermalservice` | Verified on target with 13.5.4; current 13.6.0 blocks the transport. Parser hardening is JVM-tested |
-| Foreground FPS | No | SurfaceFlinger | Verified on target with 13.5.4 (0/53/60/120 fps); current 13.6.0 blocks the transport. Android 8–14/17 formats are fixture-only |
-| Per-process PSS/RSS | No | `dumpsys meminfo` / `ps` | PSS verified on target with 13.5.4; RSS UI/source verified through a forced shim. Normal `ps` fallback is blocked by the current 13.6.0 transport |
-| Stop app | No | `am force-stop` + `ps` verification | Stop verified on target with 13.5.4; post-stop verification is code/JVM-tested, device path blocked now |
+| CPU/GPU temperatures | No | `dumpsys thermalservice` | Verified on target with 13.5.4 (historical); transport restored, not re-run in the latest pass. Parser hardening is JVM-tested |
+| Foreground FPS | No | SurfaceFlinger | Verified on target with 13.5.4 (historical 0/53/60/120 fps); transport restored, not re-run in the latest pass. Android 8–14/17 formats are fixture-only |
+| Per-process PSS/RSS | No | `dumpsys meminfo` / `ps` | PSS + shell UID table re-verified on 13.5.4: 296-row scan, 1050 numeric UID rows, pager and Diagnostics OK. RSS UI/source verified through a forced shim; normal `ps` fallback not forced |
+| Stop app | No | `am force-stop` + `ps` verification | Stop verified on target with 13.5.4 (historical); post-stop verification is code/JVM-tested, normal transport restored but not re-run in the latest pass |
 | High-refresh FPS graph (144/165) | No | SurfaceFlinger | Geometry JVM-tested; real 144/165 Hz rendering not verified |
 
 ## Not verified

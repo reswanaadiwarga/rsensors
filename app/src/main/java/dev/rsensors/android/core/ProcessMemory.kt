@@ -22,19 +22,32 @@ enum class ProcessMetric(val label: String) {
   RSS("RSS"),
 }
 
-/** One process row: PSS from meminfo or RSS from `ps`, always in KiB. */
+/**
+ * One process row: PSS from meminfo or RSS from `ps`, always in KiB.
+ *
+ * [uid] is the shell-reported Linux UID when a `ps -A -o PID,UID,NAME` lookup
+ * matched this pid, and null when it did not (T19c-3a). The stop policy uses it
+ * to protect core processes whose `ApplicationInfo` is hidden from the app.
+ */
 data class ProcessMemory(
   val name: String,
   val pid: Int,
   val memoryKb: Long,
   val group: String,
+  val uid: Int? = null,
 )
 
-/** One app row: all processes whose name is the package or package:something. */
+/**
+ * One app row: all processes whose name is the package or package:something.
+ *
+ * [uid] is the first non-null process UID in the group, because every process
+ * of an app shares its UID; null when no member row had one (T19c-3a).
+ */
 data class AppMemory(
   val packageName: String,
   val memoryKb: Long,
   val processCount: Int,
+  val uid: Int? = null,
 )
 
 /** Parsed rows plus the metric they were measured with. */
@@ -240,6 +253,71 @@ fun parsePsRss(raw: String): List<ProcessMemory> {
 }
 
 /**
+ * Maps pid to Linux UID from `ps -A -o PID,UID,NAME` stdout (T19c-3a).
+ *
+ * Columns are located from the first header line that contains `PID`, `UID` and
+ * a name column (`NAME`, `CMD` or `COMMAND`), case-insensitively, and later
+ * rows are read at those header positions. The name column is not stored: this
+ * map only enriches already-parsed rows, so a row with just pid and UID is
+ * still usable and a process name containing spaces needs no special handling.
+ *
+ * A row is kept only when its pid is a positive plain integer and its uid is a
+ * non-negative plain integer; `ps` prints decimal numbers, so separators and
+ * usernames are malformed, not accepted. When the same pid appears twice, the
+ * last row wins. A missing header or an unreadable line yields no entry rather
+ * than an error, because this runs on an untrusted shell dump.
+ *
+ * Pure: no Android calls and no side effects.
+ *
+ * @param raw stdout of the shell-side UID command
+ * @return pid-to-uid entries in first-seen pid order; empty when nothing parses
+ */
+fun parsePsUid(raw: String): Map<Int, Int> {
+  val result = LinkedHashMap<Int, Int>()
+  var pidIndex = -1
+  var uidIndex = -1
+
+  for (line in raw.lineSequence()) {
+    if (line.isBlank()) continue
+    val tokens = line.trim().split(PS_WHITESPACE)
+
+    if (pidIndex < 0) {
+      val pid = tokens.indexOfFirst { it.equals("PID", ignoreCase = true) }
+      val uid = tokens.indexOfFirst { it.equals("UID", ignoreCase = true) }
+      val name = tokens.indexOfFirst { it.lowercase(Locale.ROOT) in PS_NAME_HEADERS }
+      if (pid >= 0 && uid >= 0 && name >= 0) {
+        pidIndex = pid
+        uidIndex = uid
+      }
+      continue
+    }
+
+    val pid = tokens.getOrNull(pidIndex)?.toIntOrNull() ?: continue
+    if (pid <= 0) continue
+    val uid = tokens.getOrNull(uidIndex)?.toIntOrNull() ?: continue
+    if (uid < 0) continue
+    // Last duplicate wins, matching ps's own latest-row ordering.
+    result[pid] = uid
+  }
+
+  return result
+}
+
+/**
+ * Returns [rows] with `uid` filled from [uids] by pid (T19c-3a).
+ *
+ * Rows whose pid is absent keep their existing uid (normally null), so the
+ * function is idempotent and never invents a UID. Order, names, memory and
+ * groups are preserved, and the input list is not mutated.
+ *
+ * @param rows parsed process rows
+ * @param uids pid-to-uid entries from [parsePsUid]
+ * @return a new list of copied rows
+ */
+fun attachUids(rows: List<ProcessMemory>, uids: Map<Int, Int>): List<ProcessMemory> =
+  rows.map { row -> row.copy(uid = uids[row.pid] ?: row.uid) }
+
+/**
  * Chooses the process list for one scan (T19b-3).
  *
  * A non-empty PSS section wins, because meminfo is the richer route and its
@@ -275,10 +353,11 @@ private val HIDDEN_GROUPS = setOf("native", "system")
  * (case-insensitive).
  *
  * A process named `package` and its helpers `package:remote` collapse into one
- * [AppMemory] with the summed memory and the process count. The result is a new
- * list sorted by total memory descending, then package name. RSS rows carry the
- * [RSS_GROUP] group, which is not hidden, so the fallback list is not emptied
- * by the Apps filter.
+ * [AppMemory] with the summed memory, the process count and the first non-null
+ * member `uid` (all processes of an app share one UID, T19c-3a). The result is
+ * a new list sorted by total memory descending, then package name. RSS rows
+ * carry the [RSS_GROUP] group, which is not hidden, so the fallback list is not
+ * emptied by the Apps filter.
  */
 fun groupApps(processes: List<ProcessMemory>): List<AppMemory> =
   processes
@@ -289,6 +368,7 @@ fun groupApps(processes: List<ProcessMemory>): List<AppMemory> =
         packageName = packageName,
         memoryKb = rows.sumOf { it.memoryKb },
         processCount = rows.size,
+        uid = rows.firstNotNullOfOrNull { it.uid },
       )
     }
     .sortedWith(compareByDescending<AppMemory> { it.memoryKb }.thenBy { it.packageName })

@@ -103,7 +103,9 @@ class ProcessPageView(
    * row. A Process row carries [packageName] only when its base name resolves
    * to an installed package; otherwise the policy sees a native/unknown target.
    * [pid] is null for Apps rows, and [processCount] is the grouped app's process
-   * count or the number of rows sharing a Process row's base name.
+   * count or the number of rows sharing a Process row's base name. [uid] is the
+   * shell-reported UID attached by the scan (T19c-3a): it lets a row protect a
+   * hidden core process even when `ApplicationInfo` is unavailable.
    */
   private data class DisplayRow(
     val label: String,
@@ -112,6 +114,7 @@ class ProcessPageView(
     val groups: Set<String>,
     val pid: Int?,
     val processCount: Int,
+    val uid: Int?,
   )
 
   /**
@@ -782,6 +785,7 @@ class ProcessPageView(
           groups = groupsByPackage[app.packageName].orEmpty(),
           pid = null,
           processCount = app.processCount,
+          uid = app.uid,
         )
       }
     }
@@ -797,6 +801,7 @@ class ProcessPageView(
           groups = setOf(process.group),
           pid = process.pid,
           processCount = (counts[base] ?: 1).coerceAtLeast(1),
+          uid = process.uid,
         )
       }
     }
@@ -810,7 +815,10 @@ class ProcessPageView(
    * keeps them stoppable with a warning. Processes rows are known only when
    * their base package resolves, so native/unknown names are protected. All
    * Android flags and the launcher/IME/self/Shizuku identities come from the
-   * same cached lookups the list uses.
+   * same cached lookups the list uses. The UID is the resolved
+   * `ApplicationInfo` UID when visible, otherwise the shell-reported row UID
+   * (T19c-3a), so a hidden core process is still protected by UID < 10000
+   * instead of being downgraded to a warning.
    */
   private fun stopTargetFor(row: DisplayRow): StopTarget {
     val appRow = mode == Mode.APPS
@@ -818,7 +826,7 @@ class ProcessPageView(
     val info = packageName?.let { resolveApplicationInfo(it) }
     return StopTarget(
       packageName = packageName,
-      uid = info?.uid,
+      uid = info?.uid ?: row.uid,
       groups = row.groups,
       isKnownApp = appRow || info != null,
       isSystemApp = info != null && (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,

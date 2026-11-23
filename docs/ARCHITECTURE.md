@@ -132,8 +132,9 @@ Copy report.
 ## Shizuku
 
 `ShizukuDumpsysRunner` binds `DumpsysUserService` with
-`Shizuku.bindUserService` (tag `dumpsys`, version 5). The AIDL exposes
-`runDumpsys()`, `runFps()`, `runMeminfo()` and `stopPackage()`. The service
+`Shizuku.bindUserService` (tag `dumpsys`, version 6). The AIDL exposes
+`runDumpsys()`, `runFps()`, `runMeminfo()`, `runProcessUids()` and
+`stopPackage()`. The service
 executes absolute `/system/bin/dumpsys` commands and returns stdout/compact
 strings; `stopPackage` validates the package name and runs
 `/system/bin/am force-stop` with a `ProcessBuilder` argument array, returning

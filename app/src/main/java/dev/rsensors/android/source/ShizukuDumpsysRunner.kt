@@ -21,9 +21,10 @@ import rikka.shizuku.Shizuku
  * [DumpsysUserService] — a process Shizuku starts as the shell UID — and this
  * runner only binds to it and calls [IDumpsysService.runDumpsys] /
  * [IDumpsysService.runFps] / [IDumpsysService.runMeminfo] /
- * [IDumpsysService.stopPackage]. All calls share the binding: `dumpsys window`,
- * `--list`, `--latency`, the meminfo dump and `am force-stop` must run in the
- * same shell process as the thermal dump. Binding is lazy and
+ * [IDumpsysService.runProcessUids] / [IDumpsysService.stopPackage]. All calls
+ * share the binding: `dumpsys window`, `--list`, `--latency`, the meminfo dump,
+ * the `ps` UID table and `am force-stop` must run in the same shell process as
+ * the thermal dump. Binding is lazy and
  * self-healing: the first call after a granted permission starts a bind and
  * yields null for that poll, later polls use the live service, and any failure
  * clears the reference so the next poll binds again. That is what makes killing
@@ -37,7 +38,8 @@ import rikka.shizuku.Shizuku
  * temperature poll continues.
  *
  * Threading: [run] and [runFps] are called on the poller's worker thread and
- * [runMeminfo] and [stopPackage] on the process page's own worker thread, while
+ * [runMeminfo], [runProcessUids] and [stopPackage] on the process page's own
+ * worker thread, while
  * the connection callbacks arrive on the main thread. The binder calls
  * themselves (`pingBinder`, `checkSelfPermission`, `bindUserService`) are
  * posted to the main looper, matching the official demo and avoiding any
@@ -66,8 +68,8 @@ class ShizukuDumpsysRunner(context: Context) :
    * Binding descriptor for the UserService.
    *
    * `daemon(false)` because the OS may reclaim an idle service between polls;
-   * `version(5)` forces a fresh registration after the T18 AIDL added
-   * `stopPackage`, so a stale v4 shell process cannot answer the new
+   * `version(6)` forces a fresh registration after the T19c-3a AIDL added
+   * `runProcessUids`, so a stale v5 shell process cannot answer the new
    * transaction;
    * `tag("dumpsys")` keeps that record addressable; `debuggable(false)` keeps
    * the shell-side process un-debuggable in release and debug builds alike.
@@ -79,7 +81,7 @@ class ShizukuDumpsysRunner(context: Context) :
     .processNameSuffix("dumpsys")
     .tag(TAG_NAME)
     .debuggable(false)
-    .version(5)
+    .version(6)
 
   /** Live binding, or null while unbound; written on both threads. */
   @Volatile private var service: IDumpsysService? = null
@@ -213,6 +215,38 @@ class ShizukuDumpsysRunner(context: Context) :
   }
 
   /**
+   * Runs one `ps -A -o PID,UID,NAME` read through the same shell process as
+   * [run] (T19c-3a).
+   *
+   * Called on the process page's scan thread after [runMeminfo]; the page
+   * parses the table and attaches UIDs to the snapshot rows. A missing or
+   * failed service reports null like the other routes, so the scan keeps its
+   * null UIDs and continues.
+   *
+   * @return the raw `ps` UID table stdout, or null on any Shizuku or binder
+   *   failure; the process page must survive a failed UID lookup
+   */
+  override fun runProcessUids(): String? {
+    val current = service
+    if (current == null) {
+      Log.d(TAG, "runProcessUids: no UserService (binding=$binding)")
+      abandonTimedOutBind()
+      tryBind()
+      return null
+    }
+    return try {
+      Log.d(TAG, "runProcessUids call")
+      val dump = current.runProcessUids()
+      Log.d(TAG, "runProcessUids returned ${dump.length} chars")
+      dump
+    } catch (e: Exception) {
+      Log.w(TAG, "runProcessUids failed", e)
+      forgetService()
+      null
+    }
+  }
+
+  /**
    * Stops [packageName] through the same shell process as [run] (ANDROID.md §3,
    * §9, §8 T18).
    *
@@ -329,7 +363,7 @@ class ShizukuDumpsysRunner(context: Context) :
     }
 
     try {
-      Log.i(TAG, "bindUserService version=5 tag=$TAG_NAME")
+      Log.i(TAG, "bindUserService version=6 tag=$TAG_NAME")
       Shizuku.bindUserService(args, connection)
       synchronized(bindLock) {
         // The connection may already have fired while bindUserService ran; do

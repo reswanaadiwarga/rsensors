@@ -9,8 +9,9 @@
 // the process page, or `ps -A -o PID,RSS,NAME` stdout when the dump has no PSS
 // rows or fails (version 4, ANDROID.md §8 T17, T19b-3). `stopPackage`
 // runs `am force-stop` for one already-validated package and returns `OK` or
-// `ERR …` (ANDROID.md §8 T18); adding it bumps the UserService registration to
-// version 5.
+// `ERR …` (ANDROID.md §8 T18). `runProcessUids` returns `ps -A -o PID,UID,NAME`
+// stdout so the page can protect hidden core processes by UID (T19c-3a); adding
+// it bumps the UserService registration to version 6.
 package dev.rsensors.android.shizuku;
 
 interface IDumpsysService {
@@ -19,4 +20,5 @@ interface IDumpsysService {
     String runFps() = 2;
     String runMeminfo() = 3;
     String stopPackage(String packageName) = 4;
+    String runProcessUids() = 5;
 }

@@ -653,6 +653,116 @@ class ProcessMemoryTest {
   }
 
   @Test
+  fun `parsePsUid maps PID to UID from a PID UID NAME header`() {
+    val raw = """
+      PID   UID NAME
+        1     0 init
+     4100 10123 com.example.notes
+    """.trimIndent()
+
+    assertEquals(mapOf(1 to 0, 4100 to 10123), parsePsUid(raw))
+  }
+
+  @Test
+  fun `parsePsUid maps columns by header position when reordered`() {
+    val raw = """
+      NAME UID PID
+      com.example.notes 10123 4100
+      system 1000 1000
+    """.trimIndent()
+
+    assertEquals(mapOf(4100 to 10123, 1000 to 1000), parsePsUid(raw))
+  }
+
+  @Test
+  fun `parsePsUid accepts case-insensitive headers and CMD or COMMAND`() {
+    val lower = """
+      pid uid cmd
+        7 2000 com.example.a
+    """.trimIndent()
+    val command = """
+      PID UID COMMAND
+        8 2001 com.example.b
+    """.trimIndent()
+
+    assertEquals(mapOf(7 to 2000), parsePsUid(lower))
+    assertEquals(mapOf(8 to 2001), parsePsUid(command))
+  }
+
+  @Test
+  fun `parsePsUid skips malformed and non-numeric rows`() {
+    val raw = """
+      PID UID NAME
+        0 1000 zero-pid
+       -1 1000 negative-pid
+        9 -1 negative-uid
+       10 abc nonnumeric-uid
+      abc 1000 nonnumeric-pid
+       11 1000 valid
+       12
+    """.trimIndent()
+
+    assertEquals(mapOf(11 to 1000), parsePsUid(raw))
+  }
+
+  @Test
+  fun `parsePsUid keeps the last UID for a duplicate pid`() {
+    val raw = """
+      PID UID NAME
+       10 1000 first
+       10 10123 last
+    """.trimIndent()
+
+    assertEquals(mapOf(10 to 10123), parsePsUid(raw))
+  }
+
+  @Test
+  fun `parsePsUid returns no entries without a usable header or rows`() {
+    assertEquals(emptyMap<Int, Int>(), parsePsUid(""))
+    assertEquals(emptyMap<Int, Int>(), parsePsUid("1 1000 init"))
+    assertEquals(emptyMap<Int, Int>(), parsePsUid("PID NAME\n1 init"))
+  }
+
+  @Test
+  fun `attachUids fills matching pids and leaves the rest null without mutating`() {
+    val rows = listOf(
+      ProcessMemory("system", 1000, 500L, "System"),
+      ProcessMemory("com.example.a", 2000, 100L, "Cached"),
+      ProcessMemory("com.example.b", 3000, 50L, "Cached"),
+    )
+    val uids = mapOf(1000 to 1000, 3000 to 10123)
+
+    val attached = attachUids(rows, uids)
+
+    assertEquals(
+      listOf(
+        ProcessMemory("system", 1000, 500L, "System", 1000),
+        ProcessMemory("com.example.a", 2000, 100L, "Cached", null),
+        ProcessMemory("com.example.b", 3000, 50L, "Cached", 10123),
+      ),
+      attached,
+    )
+    assertEquals(listOf(null, null, null), rows.map { it.uid })
+  }
+
+  @Test
+  fun `groupApps carries the first non-null process UID`() {
+    val rows = listOf(
+      ProcessMemory("com.example.a", 10, 100L, "Cached", null),
+      ProcessMemory("com.example.a:remote", 11, 50L, "Cached", 10123),
+      ProcessMemory("com.example.b", 12, 25L, "Cached", 10124),
+    )
+
+    assertEquals(
+      listOf(
+        AppMemory("com.example.a", 150L, 2, 10123),
+        AppMemory("com.example.b", 25L, 1, 10124),
+      ),
+      groupApps(rows),
+    )
+  }
+
+  @Test
   fun `core sources stay Android-free`() {
     val moduleDir = File("").absoluteFile
     val coreDir = listOf(

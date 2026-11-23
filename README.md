@@ -35,7 +35,9 @@ on the current phone and the exact reason when it is not.
   bar shows the app, package, its memory and a protection reason. Core system,
   native, persistent, self and Shizuku processes are protected and never offer
   Stop; system/foreground/launcher/keyboard/Play services rows warn first. AICore
-  is a warning, not a block. The stop is Android's package force-stop, so the whole
+  is a warning, not a block. A shell UID lookup protects hidden core rows by UID;
+  it does not reveal system or persistent flags the app cannot see. The stop is
+  Android's package force-stop, so the whole
   app stops; the page rescans once and a system app that restarts simply
   reappears. There is no raw kill and no undo.
 - **Temperatures where exposed**: CPU/GPU from the platform thermal service

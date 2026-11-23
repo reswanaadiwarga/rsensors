@@ -29,9 +29,10 @@ import java.io.IOException
  * `dumpsys meminfo --oom` and returns its raw stdout for the T17 process page
  * ([dev.rsensors.android.core.parseMeminfoPss]); when that dump yields no PSS
  * rows it falls back to `ps -A -o PID,RSS,NAME` so the page still has data
- * (T19b-3); [stopPackage] runs `am force-stop <package>` for the T18 stop
- * action and, because exit 0 is not proof, re-checks the package through
- * [stillRunningProcesses].
+ * (T19b-3); [runProcessUids] runs `ps -A -o PID,UID,NAME` and returns its
+ * stdout so the page can attach UIDs to hidden rows (T19c-3a); [stopPackage]
+ * runs `am force-stop <package>` for the T18 stop action and, because exit 0 is
+ * not proof, re-checks the package through [stillRunningProcesses].
  *
  * `dumpsys` is invoked by absolute path because a UserService process does not
  * inherit the app's PATH; relying on a bare `dumpsys` was a silent
@@ -43,10 +44,11 @@ import java.io.IOException
  * referenced by name from another process, hence `@Keep`.
  *
  * Threading: each call on the binder thread; the process object is confined to
- * that call. [runDumpsys] and [runMeminfo] leave errors to propagate as
- * binder/IO failures, which [dev.rsensors.android.source.ShizukuDumpsysRunner]
- * converts to a null dump so a shell hiccup cannot crash the overlay;
- * [stopPackage] catches its own so a failed stop is an `ERR` reply.
+ * that call. [runDumpsys], [runMeminfo] and [runProcessUids] leave errors to
+ * propagate as binder/IO failures, which
+ * [dev.rsensors.android.source.ShizukuDumpsysRunner] converts to a null dump so
+ * a shell hiccup cannot crash the overlay; [stopPackage] catches its own so a
+ * failed stop is an `ERR` reply.
  */
 @Keep
 class DumpsysUserService : IDumpsysService.Stub {
@@ -165,6 +167,30 @@ class DumpsysUserService : IDumpsysService.Stub {
       Log.w(TAG, "runMeminfo ps failed", e)
       throw IOException("No process memory from meminfo or ps", e)
     }
+  }
+
+  /**
+   * Returns the `ps -A -o PID,UID,NAME` table for the T19c-3a UID lookup.
+   *
+   * The app parses this pure table and attaches UIDs to its meminfo or RSS rows,
+   * so a hidden core process can be protected by its UID instead of being
+   * treated as a stoppable warning. Uses the absolute [PS] path for the same
+   * PATH reason as [DUMPSYS], an argv array so nothing parses a shell string,
+   * and reads to EOF before waiting because the process table can exceed a pipe
+   * buffer.
+   *
+   * @return stdout verbatim; the app's
+   *   [dev.rsensors.android.core.parsePsUid] trims and splits it
+   * @throws java.io.IOException when the process cannot start or exits non-zero
+   */
+  override fun runProcessUids(): String {
+    Log.i(TAG, "runProcessUids start")
+    val process = ProcessBuilder(PS, "-A", "-o", "PID,UID,NAME").start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    val exit = process.waitFor()
+    if (exit != 0) throw IOException("ps UID exit=$exit")
+    Log.i(TAG, "runProcessUids end exit=$exit chars=${output.length}")
+    return output
   }
 
   /**

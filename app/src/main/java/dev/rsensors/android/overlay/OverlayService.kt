@@ -32,10 +32,12 @@ import dev.rsensors.android.core.StopRisk
 import dev.rsensors.android.core.StopTarget
 import dev.rsensors.android.core.Strip
 import dev.rsensors.android.core.VisibilityKind
+import dev.rsensors.android.core.attachUids
 import dev.rsensors.android.core.fmtFps
 import dev.rsensors.android.core.iconSpec
 import dev.rsensors.android.core.parseFpsReply
 import dev.rsensors.android.core.parseProcessSnapshot
+import dev.rsensors.android.core.parsePsUid
 import dev.rsensors.android.core.stopDecision
 import dev.rsensors.android.core.stripSegments
 import dev.rsensors.android.source.BatterySource
@@ -550,8 +552,18 @@ class OverlayService : Service() {
         mainHandler.post { finishProcessScan(generation, null, "No process data") }
         return@post
       }
+      // Hidden ApplicationInfo leaves the stop policy without a UID, so a hidden
+      // core process would only be a warning. Enrich on the same scan thread; a
+      // failed UID lookup keeps null UIDs and the scan continues (T19c-3a).
+      val uids = try {
+        runner.runProcessUids()?.let { parsePsUid(it) }.orEmpty()
+      } catch (e: Exception) {
+        Log.w(TAG, "process UID lookup failed", e)
+        emptyMap()
+      }
+      val enriched = snapshot.copy(rows = attachUids(snapshot.rows, uids))
       val capturedAt = System.currentTimeMillis()
-      mainHandler.post { finishProcessScan(generation, snapshot to capturedAt, null) }
+      mainHandler.post { finishProcessScan(generation, enriched to capturedAt, null) }
     }
   }
 
