@@ -38,6 +38,7 @@ import dev.rsensors.android.core.fmtRam
 import dev.rsensors.android.core.fmtTemp
 import dev.rsensors.android.core.fpsLevel
 import dev.rsensors.android.core.level
+import dev.rsensors.android.core.overlayReleaseX
 import dev.rsensors.android.core.recordingControl
 import dev.rsensors.android.core.thermalLevel
 import dev.rsensors.android.core.valueRange
@@ -65,10 +66,12 @@ import kotlin.math.abs
  *   The wordy source/age row is gone: the source lives in Diagnostics.
  *   The chips drive the pill and notification only; the graph selector is
  *   independent of them.
- * - Tap toggles the card, long-press opens the app, drag moves the window and
- *   snaps it to the nearer side edge on release. A gesture that turned into a
- *   drag or a long-press never toggles; the buttons and chips consume their own
- *   taps before the panel sees them.
+ * - Tap toggles the card, long-press opens the app, drag moves the window.
+ *   On release the window settles at the nearer side edge when the persisted
+ *   "Snap to edges" setting is on (the pre-existing 8 dp margin), or at the
+ *   exact drop position clamped fully on screen when it is off. A gesture that
+ *   turned into a drag or a long-press never toggles; the buttons and chips
+ *   consume their own taps before the panel sees them.
  * - The RAM row opens the process page (T17): a second page with the same
  *   window, 280 dp wide, its own Back/Refresh and Apps/Processes filter. The
  *   normal card hides behind it and stays expanded; Back or a tap on the pill
@@ -135,7 +138,15 @@ class OverlayView(
      */
     fun onStopRequested(target: StopTarget)
 
-    /** The window settled at a new position (after snap); persist it. */
+    /**
+     * Whether a drag release should snap to the nearer side edge.
+     *
+     * The service reads the persisted preference here at release time, so a
+     * change applies to the next drag without recreating the panel.
+     */
+    fun snapToEdges(): Boolean
+
+    /** The window settled at a new position (snapped or free); persist it. */
     fun onPositionChanged(x: Int, y: Int, expanded: Boolean)
   }
 
@@ -678,7 +689,7 @@ class OverlayView(
         removeCallbacks(longPressRunnable)
         when {
           dragging -> {
-            snapToEdge()
+            settleRelease()
             callbacks.onPositionChanged(params.x, params.y, expanded)
           }
 
@@ -720,19 +731,24 @@ class OverlayView(
   }
 
   /**
-   * Snaps the window to the nearer side edge, keeping a small margin so the
-   * rounded corner is not flush with the screen edge, then clamps vertically.
+   * Settles the window after a drag: x from the pure release rule, y from the
+   * existing vertical clamp.
+   *
+   * The setting is read once per release through [Callbacks.snapToEdges], so a
+   * change applies to the next drag without recreating the panel or restarting
+   * the service. With snapping on, x keeps the 8 dp side margin; off, x is the
+   * exact drop position clamped fully on screen. y never uses a margin: the
+   * window may sit flush with the top or bottom edge.
    */
-  private fun snapToEdge() {
+  private fun settleRelease() {
     val bounds = OverlayParams.screenBounds(windowManager, context)
-    val margin = dp(SNAP_MARGIN_DP)
-    val maxX = bounds.width() - width
-    params.x = if (params.x + width / 2 < bounds.width() / 2) {
-      margin
-    } else {
-      (maxX - margin).coerceAtLeast(0)
-    }
-    params.x = OverlayParams.clamp(params.x, maxX)
+    params.x = overlayReleaseX(
+      x = params.x,
+      width = width,
+      screenWidth = bounds.width(),
+      snapToEdges = callbacks.snapToEdges(),
+      edgeMargin = dp(SNAP_MARGIN_DP),
+    )
     params.y = OverlayParams.clamp(params.y, bounds.height() - height)
     windowManager.updateViewLayout(this, params)
   }

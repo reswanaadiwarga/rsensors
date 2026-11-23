@@ -11,7 +11,9 @@ on the parent `feat/process-ram`) and installed/device-verified on the target
 `feat/t19a-diagnostics` (**299 tests**, 160 independent acceptance checks;
 device-verified 2026-11-23 with caveats). The expanded card's Record session /
 Stop recording toggle adds 3 tests (**302 total**) on `feat/record-overlay`;
-its device check is pending. The 0.2.0 release remains the published baseline
+its device check is pending. The persisted `Snap to edges` switch adds 8 tests
+(**310 total**) on `feat/snap-toggle`; its device checks are pending. The 0.2.0
+release remains the published baseline
 and does not include these changes; nothing is merged or pushed yet. This file
 is the source of truth for the app; change it before changing code.
 
@@ -167,8 +169,11 @@ nice-to-haves:
 - **UX reference**: MIUI Game Turbo's performance monitor — a small
   always-on-top panel with CPU/GPU readings and a mini graph — without the
   game launcher or the vendor lock-in.
-- **Drag** anywhere; position and collapsed/expanded state persist. Snap to
-  left/right edge on release.
+- **Drag** anywhere; position and collapsed/expanded state persist. `Snap to
+  edges` on the main screen (default on) makes a release jump to the nearer
+  left/right side with an 8 dp margin; off keeps the exact drop position,
+  clamped fully on-screen, and persists it. The switch applies to the next
+  drag; no service restart.
 - **Screen off pauses polling**; screen on triggers an immediate poll so the
   first frame is never stale.
 - **Poll cadence**: 2 s expanded, 5 s collapsed, paused with screen off.
@@ -197,6 +202,7 @@ app/src/main/java/dev/rsensors/android/
                             battery, thermalStatus, board, sourceName, fps
     Thresholds.kt           level(), thermalLevel(), warn/hot constants
     Format.kt               fmtTemp(), fmtFps(), fmtAge(), tooltip()
+    OverlayPlacement.kt     drag-release x: snap to the nearer side or free drop
     Strip.kt                stripSegments(reading, fps, now, visibility) -> segments + dim
     FpsParse.kt             focus/layer/latency parsing + fresh-window fps (pure)
     Icon.kt                 iconSpec(reading, now) -> label + level
@@ -235,7 +241,7 @@ app/src/main/java/dev/rsensors/android/
     SessionRecorder.kt      CSV writer owned by the poller
     OverlayParams.kt        WindowManager.LayoutParams helpers
     OverlayPreferences.kt   SharedPreferences: demo, position, expanded, boot,
-                            CPU/GPU/BAT/FPS/RAM visibility
+                            snap to edges, CPU/GPU/BAT/FPS/RAM visibility
   ui/
     MainActivity.kt         permission flow, start/stop, settings
     SessionsActivity.kt     saved session list
@@ -413,8 +419,9 @@ Test layers:
   AICore is a warning, not a block. Manual: select each tier, confirm the
   presence/absence of Stop, then stop a cached app and AICore once; verify the
   package disappears and the page rescan reflects a restart.
-- **Instrumented (manual)**: overlay permission flow, drag, service
-  survives screen off/on, reboot autostart. Run on the target phone.
+- **Instrumented (manual)**: overlay permission flow, drag with `Snap to edges`
+  on and off, service survives screen off/on, reboot autostart. Run on the
+  target phone.
 
 End-to-end verification for the whole project: install the APK, grant
 overlay + notifications, and confirm the pill shows the same number as the
@@ -796,7 +803,9 @@ Defaults are chosen; change them now, not during implementation.
   unminified for fast iteration.
 - Temperature display rounds half-up (`roundToInt`); no acceptance case
   depends on exact .5 values.
-- Overlay tap expands; long-press opens the app; drag moves.
+- Overlay tap expands; long-press opens the app; drag moves and either snaps to
+  the nearer side (`Snap to edges`, default on) or stays at the clamped drop
+  position.
 
 ## 10. T0 probe results (2026-11-21)
 

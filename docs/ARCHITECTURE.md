@@ -8,7 +8,7 @@ diagnostics and the Shizuku guide.
 
 | Package | Responsibility |
 |---|---|
-| `core/` | pure Kotlin: `Reading`, thresholds, pill segments, formatting, FPS parsing, CSV sessions, chart geometry, visibility, ranges, process-memory PSS parsing/grouping/paging, the stop-risk policy, Shizuku version predicate |
+| `core/` | pure Kotlin: `Reading`, thresholds, pill segments, formatting, FPS parsing, CSV sessions, chart geometry, visibility, ranges, process-memory PSS parsing/grouping/paging, the stop-risk policy, drag-release placement, Shizuku version predicate |
 | `source/` | sensor sources, the source chain, the Shizuku runner, session storage |
 | `shizuku/` | `DumpsysUserService` and the AIDL contract executed as the shell user |
 | `overlay/` | foreground service, window, pill/card/process-page views, row selection and stop, notification, recording, preferences, Diagnostics probe store |
@@ -102,6 +102,11 @@ be opened or deleted. Deletion is permanent and confirmed.
   It posts to the same recorder worker as the main-screen Record switch, so the
   CSV format and start/stop semantics are identical; the label and
   accessibility description come from `core/RecordingControl.kt`.
+- Drag persists the window position and expanded state. Release geometry comes
+  from `core/OverlayPlacement.kt`: with `Snap to edges` on (default) the window
+  keeps an 8 dp margin from the nearer side; off, it stays at the exact drop
+  position, clamped on-screen. The service reads the preference at each
+  release, so a change needs no restart.
 
 ## Diagnostics
 

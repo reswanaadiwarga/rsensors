@@ -842,6 +842,13 @@ class OverlayService : Service() {
       requestStop(target)
     }
 
+    /**
+     * Reads the snap setting at release time instead of caching it, so a change
+     * made on the main screen applies to the very next drag with no service
+     * restart (ANDROID.md §3).
+     */
+    override fun snapToEdges(): Boolean = OverlayPreferences.isSnapToEdge(this@OverlayService)
+
     override fun onPositionChanged(x: Int, y: Int, expanded: Boolean) {
       OverlayPreferences.setPosition(this@OverlayService, x, y)
     }

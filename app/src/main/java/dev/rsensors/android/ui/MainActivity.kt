@@ -48,9 +48,9 @@ import rikka.shizuku.Shizuku
  * Requests nothing at launch. Every permission is requested from an explicit
  * button, because POST_NOTIFICATIONS, the overlay grant and Shizuku's permission
  * are user decisions the app must not front-load. The screen reflects live state
- * (overlay grant, notification grant, service running, recording, demo and boot
- * switches, Shizuku server and Shizuku grant), refreshed in [onResume], after
- * each launcher result and after a Shizuku permission answer.
+ * (overlay grant, notification grant, service running, recording, demo, snap
+ * and boot switches, Shizuku server and Shizuku grant), refreshed in [onResume],
+ * after each launcher result and after a Shizuku permission answer.
  *
  * Shizuku cannot be started by an app (§6): the screen only links to the Shizuku
  * manager and asks it for permission. Every Shizuku call is wrapped, because the
@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
   private var notificationsGranted by mutableStateOf(false)
   private var demoEnabled by mutableStateOf(false)
   private var bootEnabled by mutableStateOf(true)
+  private var snapToEdge by mutableStateOf(true)
 
   /**
    * Optimistic mirror of [OverlayService.isRunning]: set immediately on
@@ -121,6 +122,7 @@ class MainActivity : ComponentActivity() {
           recording = recording,
           demoEnabled = demoEnabled,
           bootEnabled = bootEnabled,
+          snapToEdge = snapToEdge,
           shizukuInstalled = shizukuInstalled,
           shizukuRunning = shizukuRunning,
           shizukuGranted = shizukuGranted,
@@ -135,6 +137,7 @@ class MainActivity : ComponentActivity() {
           onOpenDiagnostics = ::openDiagnostics,
           onDemoChange = ::setDemo,
           onBootChange = ::updateBootEnabled,
+          onSnapChange = ::updateSnapToEdge,
           onOpenAppSettings = ::openAppSettings,
           onOpenShizuku = ::openShizuku,
           onRequestShizuku = ::requestShizukuPermission,
@@ -160,6 +163,7 @@ class MainActivity : ComponentActivity() {
     notificationsGranted = notificationsGranted()
     demoEnabled = OverlayPreferences.isDemo(this)
     bootEnabled = OverlayPreferences.isBootEnabled(this)
+    snapToEdge = OverlayPreferences.isSnapToEdge(this)
     serviceRunning = OverlayService.isRunning
     recording = OverlayService.isRecording
     shizukuInstalled = isShizukuInstalled()
@@ -320,6 +324,16 @@ class MainActivity : ComponentActivity() {
     bootEnabled = enabled
   }
 
+  /**
+   * Persists the "Snap to edges" switch. The running overlay is untouched: the
+   * service reads the preference at each drag release, so the next drag uses
+   * the new value without a restart.
+   */
+  private fun updateSnapToEdge(enabled: Boolean) {
+    OverlayPreferences.setSnapToEdge(this, enabled)
+    snapToEdge = enabled
+  }
+
   /** Opens the Shizuku manager so the user can start its server. */
   private fun openShizuku() {
     val intent = try {
@@ -363,6 +377,7 @@ private fun HomeScreen(
   recording: Boolean,
   demoEnabled: Boolean,
   bootEnabled: Boolean,
+  snapToEdge: Boolean,
   shizukuInstalled: Boolean,
   shizukuRunning: Boolean,
   shizukuGranted: Boolean,
@@ -376,6 +391,7 @@ private fun HomeScreen(
   onOpenDiagnostics: () -> Unit,
   onDemoChange: (Boolean) -> Unit,
   onBootChange: (Boolean) -> Unit,
+  onSnapChange: (Boolean) -> Unit,
   onOpenAppSettings: () -> Unit,
   onOpenShizuku: () -> Unit,
   onRequestShizuku: () -> Unit,
@@ -487,6 +503,25 @@ private fun HomeScreen(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
       )
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("Snap to edges")
+          Text(
+            if (snapToEdge) {
+              "Jumps to the nearest side after dragging"
+            } else {
+              "Stays where you drop it"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+          )
+        }
+        Switch(checked = snapToEdge, onCheckedChange = onSnapChange)
+      }
 
       Spacer(Modifier.height(4.dp))
       Text("At boot", style = MaterialTheme.typography.titleSmall)

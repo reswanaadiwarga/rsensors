@@ -10,7 +10,8 @@ import dev.rsensors.android.core.PillVisibility
  *
  * Holds the demo switch, the window position in pixels, the collapsed /
  * expanded state, which kinds the pill shows (CPU/GPU / BAT / FPS / RAM chips),
- * the sparkline's graph series, and whether
+ * the sparkline's graph series, whether a drag release snaps to the nearer side
+ * edge, and whether
  * [dev.rsensors.android.boot.BootReceiver] should start the overlay after a
  * reboot (ANDROID.md §8 T9, T10, T15, T15b, T15i). Position is only written when
  * a drag settles, not on every frame.
@@ -32,6 +33,7 @@ object OverlayPreferences {
   private const val KEY_SHOW_FPS = "show_fps"
   private const val KEY_SHOW_RAM = "show_ram"
   private const val KEY_GRAPH_SERIES = "graph_series"
+  private const val KEY_SNAP_TO_EDGE = "snap_to_edge"
 
   /** Sentinel for "no saved position"; the caller falls back to the defaults. */
   const val POSITION_UNSET = -1
@@ -135,6 +137,22 @@ object OverlayPreferences {
   /** Stores the sparkline's series; the next start restores it. */
   fun setGraphSeries(context: Context, series: GraphSeries) {
     prefs(context).edit { putString(KEY_GRAPH_SERIES, series.name) }
+  }
+
+  /**
+   * True when a drag release should jump to the nearer left/right edge.
+   *
+   * Defaults to on, the overlay's behaviour before the switch existed. This is
+   * read by the service at each release, not cached in the view: changing it
+   * applies to the next drag without recreating the window or restarting the
+   * service.
+   */
+  fun isSnapToEdge(context: Context): Boolean =
+    prefs(context).getBoolean(KEY_SNAP_TO_EDGE, true)
+
+  /** Stores the "Snap to edges" switch; the next release reads it. */
+  fun setSnapToEdge(context: Context, enabled: Boolean) {
+    prefs(context).edit { putBoolean(KEY_SNAP_TO_EDGE, enabled) }
   }
 
   private fun prefs(context: Context) =
