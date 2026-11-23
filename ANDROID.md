@@ -20,10 +20,10 @@ T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
 (**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
 The Shizuku 13.5.4 guide update adds 1 (**393 total**); T19c-3a adds 8
 (**401 total**); T19c-3b adds 15 (**416 total**); T19b-6 adds 1 (**417 total**).
-All are on `main`. Device evidence is Android 16 only where available; Shizuku
-13.5.4 is restored and normal transport works. The 0.2.0 release remains the
-last published APK until the 0.3.0 build ships. This file is the source of truth
-for the app; change it before changing code.
+All are on `main` and published through the 0.3.0 release. Device evidence is
+Android 16 only where available; Shizuku 13.5.4 is installed and normal
+transport works. This file is the source of truth for the app; change it before
+changing code.
 
 ## Verification scope
 
