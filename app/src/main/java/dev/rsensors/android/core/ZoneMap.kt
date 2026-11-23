@@ -17,9 +17,10 @@ data class Zone(val index: Int, val type: String, val tempC: Double? = null)
  * Scored mapping from a thermal-zone `type` string to [ZoneCategory].
  *
  * Android has no naming standard, so the mapping is a per-string heuristic
- * seeded from the Qualcomm, MediaTek, and Exynos layouts in ANDROID.md §5.
- * Every input is lowercased and trimmed before scoring; scores are ordered so
- * an exact alias always beats a prefix and a prefix always beats a substring.
+ * seeded from the Qualcomm, MediaTek, Exynos, Samsung and Kirin layouts in
+ * ANDROID.md §5. Every input is lowercased and trimmed before scoring; scores
+ * are ordered so an exact alias always beats a prefix and a prefix always
+ * beats a substring.
  *
  * A manual override, keyed by the same normalised type string, replaces the
  * heuristic for that zone (ANDROID.md §5, §8 T7). Overrides are stored by type
@@ -125,7 +126,9 @@ object ZoneMap {
 
   private fun cpuScore(t: String): Int =
     when {
-      t == "cpu" || t == "cpu_thermal" || t == "mtktscpu" -> 100
+      // `soc-thermal` is Kirin's aggregate CPU zone; Samsung's zone can be `ap`.
+      t == "cpu" || t == "cpu_thermal" || t == "mtktscpu" ||
+        t == "soc-thermal" || t == "ap" -> 100
       t.startsWith("cpu-") || t.startsWith("cpu_") || t.startsWith("cpuss") -> 90
       t == "soc" || t == "soc_thermal" -> 60
       t.contains("cpu") -> 50
@@ -134,7 +137,9 @@ object ZoneMap {
 
   private fun gpuScore(t: String): Int =
     when {
-      t == "gpu" || t == "gpu_thermal" || t == "mtktsgpu" -> 100
+      // `gpu_tmu` is Samsung's GPU thermal zone; `kgsl` is Qualcomm's GPU driver.
+      t == "gpu" || t == "gpu_thermal" || t == "mtktsgpu" ||
+        t == "gpu_tmu" || t == "kgsl" -> 100
       t.startsWith("gpu-") || t.startsWith("gpu_") || t.startsWith("gpuss") || t == "gpu0" -> 90
       t.contains("gpu") || t.contains("mali") -> 50
       else -> 0

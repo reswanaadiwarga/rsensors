@@ -15,7 +15,15 @@ import java.util.Locale
  * Values are already degrees Celsius and are never rescaled. The HAL may name
  * its sensors freely, so a name is preferred and the numeric `mType` is the
  * fallback documented in §5 (0 CPU, 1 GPU, 2 BATTERY, 3 SKIN, 9 NPU, 10 TPU,
- * 13 SOC). Unknown sensors are dropped rather than guessed.
+ * 13 SOC). Samsung's `AP`/`BAT` aliases are recognised, while `SUBBAT` is
+ * dropped before the type fallback so a secondary battery rail is never shown
+ * as the main battery. Unknown sensors are dropped rather than guessed.
+ *
+ * A value outside `-40..150` °C is a sentinel or a unit error, not a
+ * temperature, so that entry is discarded; if every entry for a sensor is
+ * discarded the sensor stays absent. CPU and GPU may be reported by several
+ * zones, and the hottest value is the one the overlay should show; battery and
+ * board sensors keep their first occurrence for a stable display.
  *
  * Pure function: no I/O, no clock. The caller stamps the sample time.
  *
@@ -37,11 +45,17 @@ fun parseDumpsysThermal(text: String): Reading? {
 
     val match = TEMPERATURE_LINE.find(line) ?: continue
     val value = match.groupValues[VALUE_GROUP].toDoubleOrNull() ?: continue
+    if (value !in PLAUSIBLE_CELSIUS) continue
     val type = match.groupValues[TYPE_GROUP].toIntOrNull()
     val sensor = sensorFor(match.groupValues[NAME_GROUP], type) ?: continue
-    // The first occurrence inside the live block wins; a repeated name in the
-    // same block is not something the HAL emits, and first is deterministic.
-    if (sensor !in values) values[sensor] = value
+    val previous = values[sensor]
+    values[sensor] = when {
+      previous == null -> value
+      sensor == HalSensor.CPU || sensor == HalSensor.GPU -> maxOf(previous, value)
+      // Battery and board sensors keep the first occurrence so a duplicate
+      // cannot make the displayed value flicker between entries.
+      else -> previous
+    }
   }
 
   val cpu = values[HalSensor.CPU]
@@ -81,9 +95,23 @@ private val BOARD_ORDER = listOf(
   HalSensor.POWER_AMPLIFIER,
 )
 
-/** `mName` values the HAL uses on the target phone; matched case-insensitively. */
+/** `mName` values the HAL uses; matched case-insensitively after trimming. */
 private val NAME_TO_SENSOR: Map<String, HalSensor> =
-  HalSensor.entries.associateBy { it.label.uppercase(Locale.ROOT) }
+  HalSensor.entries.associateBy { it.label.uppercase(Locale.ROOT) } +
+    mapOf(
+      // Samsung reports the application processor as AP and the main battery
+      // as BAT (ANDROID.md §5).
+      "AP" to HalSensor.CPU,
+      "BAT" to HalSensor.BATTERY,
+    )
+
+/**
+ * Names dropped before any `mType` fallback.
+ *
+ * Samsung's `SUBBAT` is a secondary battery rail whose `mType` is still 2;
+ * treating it as the main battery would display the wrong temperature.
+ */
+private val IGNORED_NAMES = setOf("SUBBAT")
 
 /** ANDROID.md §5 fallback table for dumps that name a sensor something else. */
 private val TYPE_TO_SENSOR: Map<Int, HalSensor> = mapOf(
@@ -99,13 +127,28 @@ private val TYPE_TO_SENSOR: Map<Int, HalSensor> = mapOf(
 /**
  * Resolves one dump line to a sensor.
  *
+ * An ignored name resolves to null without consulting [type], so `SUBBAT`
+ * cannot become a battery through its `mType`. Any other unknown name falls
+ * back to the numeric type.
+ *
  * @param name the raw `mName` field; may carry stray spaces
  * @param type the raw `mType` field, or null when it is not an integer
- * @return the matching sensor, or null when neither the name nor the type is
- *   one this app knows
+ * @return the matching sensor, or null when the name is ignored or neither the
+ *   name nor the type is one this app knows
  */
-private fun sensorFor(name: String, type: Int?): HalSensor? =
-  NAME_TO_SENSOR[name.trim().uppercase(Locale.ROOT)] ?: type?.let { TYPE_TO_SENSOR[it] }
+private fun sensorFor(name: String, type: Int?): HalSensor? {
+  val normalised = name.trim().uppercase(Locale.ROOT)
+  if (normalised in IGNORED_NAMES) return null
+  return NAME_TO_SENSOR[normalised] ?: type?.let { TYPE_TO_SENSOR[it] }
+}
+
+/**
+ * °C band a real HAL temperature can occupy. Values outside it are sentinels
+ * (`999`) or a unit/scale mistake (`-273.15`); the entry is unusable rather
+ * than a number to draw. Endpoints are inclusive so a genuinely cold or hot
+ * sensor still reports.
+ */
+private val PLAUSIBLE_CELSIUS = -40.0..150.0
 
 private const val CURRENT_HEADER = "Current temperatures from HAL:"
 private const val STOP_HEADER = "Current cooling devices from HAL:"

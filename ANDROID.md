@@ -5,16 +5,19 @@ architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
-T19b-2 meminfo parser and T19b-3 RSS fallback, complete in code.** The RAM pill,
+T19b-2 meminfo parser, T19b-3 RSS fallback and T19b-4 thermal hardening,
+complete in code.** The RAM pill,
 process-memory page and Stop app are committed on `feat/stop-app` (T17 is on the
 parent `feat/process-ram`) and installed/device-verified on the target (**280
 tests** at T18). T19a adds the Diagnostics feature-status table (**299 tests**,
 160 independent acceptance checks; device-verified 2026-11-23 with caveats).
 Record and snap add 11 tests (**310 total**); T19b-1 adds 14 (**324 total**);
-T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**). All are on local
-`main`; the device smoke is Android 16 only. The 0.2.0 release remains the
-published baseline and does not include these changes. Nothing is pushed. This
-file is the source of truth for the app; change it before changing code.
+T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**); T19b-4 adds 10
+(**355 total**). All are on local `main`. Device evidence is Android 16 only
+where available; normal UserService transport is currently blocked by Shizuku
+13.6.0. The 0.2.0 release remains the published baseline and does not include
+these changes. Nothing is pushed. This file is the source of truth for the app;
+change it before changing code.
 
 ## Verification scope
 
@@ -356,7 +359,16 @@ Temperature{mValue=33.5, mType=3, mName=SKIN, mStatus=0}
 
 - Values are already °C; do not apply the millidegree normaliser.
 - Prefer `mName`; fall back to `mType` (0 CPU, 1 GPU, 2 BATTERY, 3 SKIN,
-  9 NPU, 10 TPU, 13 SOC).
+  9 NPU, 10 TPU, 13 SOC). Samsung aliases are recognised: `AP` is CPU and
+  `BAT` is BATTERY. `SUBBAT` is dropped *before* the `mType` fallback, so the
+  secondary battery rail never becomes the main battery even though its type is
+  2; any other unknown name still falls back to `mType`.
+- CPU and GPU take the hottest value when the HAL lists more than one entry.
+  Battery and board sensors keep the first occurrence. The cached block stays
+  ignored either way.
+- A value outside `-40.0..150.0` °C is rejected as a sentinel or unit error
+  (for example `999` or `-273.15`); a genuine `-5.5` is kept. If every entry for
+  a sensor is rejected, that sensor stays absent rather than being invented.
 - `cmd thermalservice` has no read command (only override/reset/headroom), so
   the text dump is the interface.
 - The block is ~60 lines; parse leniently because OEMs add types such as
@@ -366,9 +378,12 @@ Zone mapping is a scored match on the lowercased `type` string, seeded with:
 
 | Category | Patterns |
 |---|---|
-| CPU | `cpu-*`, `cpuss-*`, `cpu_thermal`, `soc_thermal`, `mtktscpu`, `cpu-0-0` |
-| GPU | `gpuss-*`, `gpu-*`, `gpu_thermal`, `mtktsgpu`, `gpu0` |
+| CPU | `cpu-*`, `cpuss-*`, `cpu_thermal`, `soc_thermal`, `soc-thermal` (Kirin), `mtktscpu`, `cpu-0-0`, `ap` (Samsung) |
+| GPU | `gpuss-*`, `gpu-*`, `gpu_thermal`, `gpu_tmu` (Samsung), `kgsl` (Qualcomm), `mtktsgpu`, `gpu0` |
 | Battery | `battery`, `mtktsbattery`, `batt` |
+
+The exact OEM aliases score like the other exact names, so they still lose to a
+manual override. `subbat` stays OTHER rather than being treated as a battery.
 
 Exact aliases score higher than prefix matches. A name that scores CPU but also
 mentions `gpu` or `batt` is treated as OTHER rather than guessed. Unknown zones
@@ -376,6 +391,9 @@ are shown in Diagnostics and can be assigned manually; the override is stored by
 zone `type` string, not index. This is what makes the app usable on an arbitrary
 phone without a per-model table. On the target phone the zone metadata is
 unreadable, so the mapping is inert there.
+
+The OEM aliases (`soc-thermal`, `ap`, `gpu_tmu`, `kgsl`) come from the research
+in `docs/UNIVERSALITY.md`; they are not device-verified.
 
 ## 6. Platform constraints
 
@@ -508,10 +526,11 @@ the per-feature Diagnostics status table before the universality work.
 | T19b-1 ✅ | FPS parser portability | Accepts Android 8–14 plain `--list` lines and Android 15+ wrappers; hash/legacy/BLAST/`@0(BLAST)` names; `desiredPresentTime=0` rows; `AppWindowToken` focus. Hash-prefixed plain layers are skipped when an exact twin exists (Android 16 containers) and kept only as an Android 17 fallback. 324 tests; 56 independent acceptance checks; Android 16 smoke at 0/53/60/120 fps. Real Android 8–14/17 formats remain unverified. |
 | T19b-2 ✅ | Meminfo parser tolerance | Work-profile `(pid N) (user 10)`, `kB`/`KB`/`kb`, `/ activities` and `:remote` pid suffixes, case-insensitive `pid`/`user`; unclean headings become `Unknown` instead of inheriting the previous group; malformed `(pid` rows do not change the group. PSS/grouping/sort/page behavior unchanged. 330 tests; 25 independent acceptance checks; Android 16 smoke scanned 281 processes in Apps/Processes with a working pager. The `ps`/RSS fallback and the PSS-vs-RSS label are delivered by T19b-3 below. |
 | T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only; the production Shizuku UserService is currently blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE, so the normal-transport `ps` fallback is not device-verified. |
+| T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified because Shizuku 13.6.0 blocks the normal UserService transport. |
 
-T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3 slices are complete in code on
-`main`. T17/T18/T19a are ancestors of `main` from their feature branches; record,
-snap and all three T19b slices are merged. Nothing is pushed.
+T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4 slices are complete in
+code on `main`. T17/T18/T19a are ancestors of `main` from their feature branches;
+record, snap and all four T19b slices are merged. Nothing is pushed.
 
 ### T19a feature status (2026-11-23)
 

@@ -42,6 +42,23 @@ class ZoneMapTest {
   }
 
   @Test
+  fun `kirin and samsung sysfs aliases map to cpu`() {
+    assertEquals(ZoneCategory.CPU, ZoneMap.categorize("soc-thermal"))
+    assertEquals(ZoneCategory.CPU, ZoneMap.categorize("ap"))
+  }
+
+  @Test
+  fun `samsung and qualcomm gpu aliases map to gpu`() {
+    assertEquals(ZoneCategory.GPU, ZoneMap.categorize("gpu_tmu"))
+    assertEquals(ZoneCategory.GPU, ZoneMap.categorize("kgsl"))
+  }
+
+  @Test
+  fun `subbat is never a battery zone`() {
+    assertEquals(ZoneCategory.OTHER, ZoneMap.categorize("subbat"))
+  }
+
+  @Test
   fun `unrelated zones are other`() {
     assertEquals(ZoneCategory.OTHER, ZoneMap.categorize("skin"))
     assertEquals(ZoneCategory.OTHER, ZoneMap.categorize("quiet-therm"))

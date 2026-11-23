@@ -115,15 +115,135 @@ class DumpsysParserTest {
   }
 
   @Test
-  fun `duplicate names inside the block keep the first value`() {
+  fun `duplicate cpu and gpu entries keep the hottest value`() {
+    // The HAL can list several CPU/GPU sensors; the display shows the hottest.
     val text = """
       |Current temperatures from HAL:
+      |	Temperature{mValue=61.3, mType=0, mName=CPU, mStatus=0}
       |	Temperature{mValue=38.351, mType=0, mName=CPU, mStatus=0}
-      |	Temperature{mValue=50.0, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=38.351, mType=1, mName=GPU, mStatus=0}
+      |	Temperature{mValue=56.0, mType=1, mName=GPU, mStatus=0}
       |Current cooling devices from HAL:
     """.trimMargin()
 
-    assertEquals(38.351, parseDumpsysThermal(text)!!.cpu!!, 1e-9)
+    val reading = parseDumpsysThermal(text)!!
+
+    assertEquals(61.3, reading.cpu!!, 1e-9)
+    assertEquals(56.0, reading.gpu!!, 1e-9)
+  }
+
+  @Test
+  fun `battery and board sensors keep the first occurrence`() {
+    val text = """
+      |Current temperatures from HAL:
+      |	Temperature{mValue=33.5, mType=2, mName=BATTERY, mStatus=0}
+      |	Temperature{mValue=34.5, mType=2, mName=BATTERY, mStatus=0}
+      |	Temperature{mValue=30.0, mType=3, mName=SKIN, mStatus=0}
+      |	Temperature{mValue=31.0, mType=3, mName=SKIN, mStatus=0}
+      |	Temperature{mValue=35.0, mType=13, mName=SOC, mStatus=0}
+      |	Temperature{mValue=36.0, mType=13, mName=SOC, mStatus=0}
+      |Current cooling devices from HAL:
+    """.trimMargin()
+
+    val reading = parseDumpsysThermal(text)!!
+
+    assertEquals(33.5, reading.battery!!, 1e-9)
+    assertEquals(listOf("SOC" to 35.0, "SKIN" to 30.0), reading.board)
+  }
+
+  @Test
+  fun `samsung AP and BAT aliases map to cpu and battery`() {
+    // Unrelated mType values prove the name alias, not the numeric fallback, wins.
+    val text = """
+      |Current temperatures from HAL:
+      |	Temperature{mValue=55.2, mType=14, mName= AP , mStatus=0}
+      |	Temperature{mValue=36.4, mType=14, mName= bat , mStatus=0}
+      |Current cooling devices from HAL:
+    """.trimMargin()
+
+    val reading = parseDumpsysThermal(text)!!
+
+    assertEquals(55.2, reading.cpu!!, 1e-9)
+    assertEquals(36.4, reading.battery!!, 1e-9)
+    assertNull(reading.gpu)
+  }
+
+  @Test
+  fun `SUBBAT is ignored even when its mType says battery`() {
+    // Samsung exposes SUBBAT (a secondary battery rail) with mType 2; it must not
+    // be displayed as the main battery temperature.
+    val text = """
+      |Current temperatures from HAL:
+      |	Temperature{mValue=38.0, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=36.0, mType=2, mName=SUBBAT, mStatus=0}
+      |	Temperature{mValue=35.0, mType=2, mName=subbat, mStatus=0}
+      |Current cooling devices from HAL:
+    """.trimMargin()
+
+    val reading = parseDumpsysThermal(text)!!
+
+    assertEquals(38.0, reading.cpu!!, 1e-9)
+    assertNull(reading.battery)
+  }
+
+  @Test
+  fun `out of range entries are rejected without masking a valid duplicate`() {
+    val text = """
+      |Current temperatures from HAL:
+      |	Temperature{mValue=999.0, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=45.0, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=-273.15, mType=1, mName=GPU, mStatus=0}
+      |	Temperature{mValue=40.0, mType=1, mName=GPU, mStatus=0}
+      |	Temperature{mValue=33.5, mType=2, mName=BATTERY, mStatus=0}
+      |Current cooling devices from HAL:
+    """.trimMargin()
+
+    val reading = parseDumpsysThermal(text)!!
+
+    assertEquals(45.0, reading.cpu!!, 1e-9)
+    assertEquals(40.0, reading.gpu!!, 1e-9)
+    assertEquals(33.5, reading.battery!!, 1e-9)
+  }
+
+  @Test
+  fun `a block with only implausible values returns null`() {
+    val text = """
+      |Current temperatures from HAL:
+      |	Temperature{mValue=999.0, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=200.0, mType=1, mName=GPU, mStatus=0}
+      |	Temperature{mValue=-273.15, mType=2, mName=BATTERY, mStatus=0}
+      |Current cooling devices from HAL:
+    """.trimMargin()
+
+    assertNull(parseDumpsysThermal(text))
+  }
+
+  @Test
+  fun `the sanity range endpoints are inclusive`() {
+    val text = """
+      |Current temperatures from HAL:
+      |	Temperature{mValue=-40.0, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=150.0, mType=1, mName=GPU, mStatus=0}
+      |Current cooling devices from HAL:
+    """.trimMargin()
+
+    val reading = parseDumpsysThermal(text)!!
+
+    assertEquals(-40.0, reading.cpu!!, 1e-9)
+    assertEquals(150.0, reading.gpu!!, 1e-9)
+  }
+
+  @Test
+  fun `a cached-only dump still returns null`() {
+    val text = """
+      |Cached temperatures:
+      |	Temperature{mValue=44.776, mType=0, mName=CPU, mStatus=0}
+      |	Temperature{mValue=44.761, mType=1, mName=GPU, mStatus=0}
+      |	Temperature{mValue=31.2, mType=2, mName=BATTERY, mStatus=0}
+      |HAL Ready: true
+    """.trimMargin()
+
+    assertNull(parseDumpsysThermal(text))
   }
 
   companion object {
