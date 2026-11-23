@@ -20,7 +20,9 @@ import android.view.WindowManager
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import dev.rsensors.android.core.CapabilityState
 import dev.rsensors.android.core.GraphSeries
+import dev.rsensors.android.core.ProbeStatus
 import dev.rsensors.android.core.ProcessMemory
 import dev.rsensors.android.core.Reading
 import dev.rsensors.android.core.ReadingHistory
@@ -29,6 +31,7 @@ import dev.rsensors.android.core.StopRisk
 import dev.rsensors.android.core.StopTarget
 import dev.rsensors.android.core.Strip
 import dev.rsensors.android.core.VisibilityKind
+import dev.rsensors.android.core.fmtFps
 import dev.rsensors.android.core.iconSpec
 import dev.rsensors.android.core.parseFpsReply
 import dev.rsensors.android.core.parseMeminfoPss
@@ -128,6 +131,14 @@ import rikka.shizuku.Shizuku
  * late result cannot touch a newer page. `OK` rescans once with
  * `Stop requested — refreshing…`; `ERR …` or no reply returns to the page's
  * selection bar with the reason.
+ *
+ * T19 publishes each optional shell probe to [DiagnosticsStore]: the FPS poll,
+ * every meminfo scan attempt and every stop attempt record their last state and
+ * exact reason there, so the Diagnostics feature table can explain a missing
+ * value while the pill, card and process page keep their existing behaviour.
+ * Cancelled or page-closed attempts get a terminal state instead of staying in
+ * flight, recovery clears the action-only probes, and service teardown clears
+ * the store on the worker after any queued poll.
  *
  * State: [isRunning] and [isRecording] are process-wide flags for the activity's
  * UI. [isRunning] turns true only after the window is attached and false in
@@ -244,6 +255,15 @@ class OverlayService : Service() {
   private var awaitingFirstPoll = false
 
   /**
+   * Last poll's Shizuku state. A false-to-true edge on both flags means the
+   * shell recovered, so the action-only meminfo/stop probes from the failure are
+   * cleared; [DiagnosticsStore.fps] refreshes every poll and needs no reset
+   * (T19). Worker-thread only, like the poll that reads them.
+   */
+  private var previousShizukuRunning = false
+  private var previousShizukuGranted = false
+
+  /**
    * Last notification content; a change here is what makes a notification
    * update. Written on the worker when a source is installed and on the main
    * thread when the shade is refreshed, hence the volatile marker.
@@ -286,13 +306,25 @@ class OverlayService : Service() {
       // Start Shizuku row and the notification's help action, so those three
       // never disagree within a tick (T15g).
       val shizukuRunning = isShizukuRunning()
+      val shizukuGranted = hasShizukuPermission()
+      // Recovery edge: clear only probes whose failure was just the missing
+      // shell prerequisite. A scan/stop that succeeded or failed on the command
+      // in the same window is a real result and must survive (T19).
+      val shizukuRecovered = shizukuRunning && shizukuGranted &&
+        !(previousShizukuRunning && previousShizukuGranted)
+      if (shizukuRecovered) {
+        if (DiagnosticsStore.meminfo?.shellBlocked == true) DiagnosticsStore.meminfo = null
+        if (DiagnosticsStore.stop?.shellBlocked == true) DiagnosticsStore.stop = null
+      }
+      previousShizukuRunning = shizukuRunning
+      previousShizukuGranted = shizukuGranted
       ReadingStore.snapshot = SourceSnapshot(
         reading = reading,
         now = now,
         chainErrors = chain?.lastErrors.orEmpty(),
         sysfsErrors = sysfsSource?.lastErrors.orEmpty(),
         shizukuRunning = shizukuRunning,
-        shizukuGranted = hasShizukuPermission(),
+        shizukuGranted = shizukuGranted,
         overlayRunning = true,
       )
       if (reading != null) {
@@ -344,13 +376,53 @@ class OverlayService : Service() {
    * One foreground FPS value for this poll, or null when the shell route is
    * unavailable. Called on the worker, after the temperature poll, so a failed
    * or slow FPS call can never blank the temperatures; demo mode has no runner.
+   *
+   * Every outcome also publishes a [ProbeStatus] to [DiagnosticsStore], because
+   * the pill can only draw a null field while Diagnostics must name the reason
+   * (T19). A parsed 0 is a valid idle-screen measurement, not a failure.
    */
   private fun pollFps(): Double? {
-    val runner = fpsRunner ?: return null
+    val runner = fpsRunner
+    if (runner == null) {
+      DiagnosticsStore.fps = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "The FPS shell service is not bound.",
+        SOURCE_FPS,
+      )
+      return null
+    }
     return try {
-      runner.runFps()?.let(::parseFpsReply)
+      val reply = runner.runFps()
+      if (reply == null) {
+        DiagnosticsStore.fps = ProbeStatus(
+          CapabilityState.UNAVAILABLE,
+          "No reply from Shizuku.",
+          SOURCE_FPS,
+        )
+        return null
+      }
+      val value = parseFpsReply(reply)
+      if (value == null) {
+        val trimmed = reply.trim()
+        val detail = if (trimmed.startsWith("ERR")) trimmed else "Unrecognized FPS reply."
+        DiagnosticsStore.fps = ProbeStatus(CapabilityState.UNAVAILABLE, detail, SOURCE_FPS)
+        null
+      } else {
+        val detail = if (value == 0.0) {
+          "0 fps (idle screen)"
+        } else {
+          "${fmtFps(value)} fps"
+        }
+        DiagnosticsStore.fps = ProbeStatus(CapabilityState.OK, detail, SOURCE_FPS)
+        value
+      }
     } catch (e: Exception) {
       Log.w(TAG, "fps poll failed", e)
+      DiagnosticsStore.fps = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName,
+        SOURCE_FPS,
+      )
       null
     }
   }
@@ -402,16 +474,34 @@ class OverlayService : Service() {
 
     if (OverlayPreferences.isDemo(this)) {
       processScanInFlight = false
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Not available in demo mode",
+        SOURCE_MEMINFO,
+        shellBlocked = true,
+      )
       view?.setProcessPageUnavailable("Not available in demo mode", showStart = false)
       return
     }
     if (!isShizukuRunning()) {
       processScanInFlight = false
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Process memory needs Shizuku",
+        SOURCE_MEMINFO,
+        shellBlocked = true,
+      )
       view?.setProcessPageUnavailable("Process memory needs Shizuku", showStart = true)
       return
     }
     if (!hasShizukuPermission()) {
       processScanInFlight = false
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Grant Shizuku permission to see process memory",
+        SOURCE_MEMINFO,
+        shellBlocked = true,
+      )
       view?.setProcessPageUnavailable(
         "Grant Shizuku permission to see process memory",
         showStart = true,
@@ -422,11 +512,17 @@ class OverlayService : Service() {
     val handler = meminfoHandler
     if (runner == null || handler == null) {
       processScanInFlight = false
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Process scanner unavailable",
+        SOURCE_MEMINFO,
+      )
       view?.setProcessPageError("Process scanner unavailable")
       return
     }
 
     processScanInFlight = true
+    DiagnosticsStore.meminfo = ProbeStatus(CapabilityState.UNKNOWN, SCAN_MESSAGE, SOURCE_MEMINFO)
     view?.setProcessPageLoading(message)
     Log.i(TAG, "meminfo scan start")
     handler.post {
@@ -468,11 +564,18 @@ class OverlayService : Service() {
     processScanInFlight = false
     if (snapshot != null) {
       lastProcessSnapshot = snapshot
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.OK,
+        "${snapshot.first.size} processes",
+        SOURCE_MEMINFO,
+      )
       view?.setProcessPageData(snapshot.first, snapshot.second)
       Log.i(TAG, "meminfo scan end rows=${snapshot.first.size}")
     } else {
-      view?.setProcessPageError(error ?: "Couldn't read process memory")
-      Log.w(TAG, "meminfo scan failure: ${error ?: "unknown"}")
+      val reason = error ?: "Couldn't read process memory"
+      DiagnosticsStore.meminfo = ProbeStatus(CapabilityState.UNAVAILABLE, reason, SOURCE_MEMINFO)
+      view?.setProcessPageError(reason)
+      Log.w(TAG, "meminfo scan failure: $reason")
     }
   }
 
@@ -482,7 +585,9 @@ class OverlayService : Service() {
    * A shell dump cannot be aborted, so its eventual result is dropped by the
    * generation check; the page is restored to the last successful snapshot (the
    * age shows how old it is) or to a retryable error. Screen off calls this so
-   * waking the phone never finds a permanent `Scanning processes…`.
+   * waking the phone never finds a permanent `Scanning processes…`. The probe
+   * gets the matching terminal state so the feature table cannot stay in flight
+   * either (T19).
    */
   private fun cancelProcessScan() {
     processScanGeneration += 1
@@ -491,8 +596,18 @@ class OverlayService : Service() {
     Log.i(TAG, "meminfo scan cancelled")
     val snapshot = lastProcessSnapshot
     if (snapshot != null) {
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.DEGRADED,
+        "Scan cancelled; showing the previous result.",
+        SOURCE_MEMINFO,
+      )
       view?.setProcessPageData(snapshot.first, snapshot.second)
     } else {
+      DiagnosticsStore.meminfo = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Scan cancelled.",
+        SOURCE_MEMINFO,
+      )
       view?.setProcessPageError("Scan cancelled")
     }
   }
@@ -517,29 +632,64 @@ class OverlayService : Service() {
     if (!processPageOpen || stopInFlight) return
     val packageName = target.packageName ?: return
     if (stopDecision(target).risk == StopRisk.PROTECTED) {
+      // A deliberate refusal is a degraded attempt, not an unavailable feature:
+      // Stop still works, this one target was blocked (T19).
+      DiagnosticsStore.stop = ProbeStatus(
+        CapabilityState.DEGRADED,
+        "Last attempt blocked: $packageName is protected.",
+        SOURCE_STOP,
+      )
       view?.setProcessPageStopError("This app is protected.")
       return
     }
     if (OverlayPreferences.isDemo(this)) {
+      DiagnosticsStore.stop = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Stops are not available in demo mode",
+        SOURCE_STOP,
+        shellBlocked = true,
+      )
       view?.setProcessPageStopError("Stops are not available in demo mode")
       return
     }
     if (!isShizukuRunning()) {
+      DiagnosticsStore.stop = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Shizuku is not running",
+        SOURCE_STOP,
+        shellBlocked = true,
+      )
       view?.setProcessPageStopError("Shizuku is not running")
       return
     }
     if (!hasShizukuPermission()) {
+      DiagnosticsStore.stop = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Grant Shizuku permission to stop apps",
+        SOURCE_STOP,
+        shellBlocked = true,
+      )
       view?.setProcessPageStopError("Grant Shizuku permission to stop apps")
       return
     }
     val runner = stopRunner
     val handler = meminfoHandler
     if (runner == null || handler == null) {
+      DiagnosticsStore.stop = ProbeStatus(
+        CapabilityState.UNAVAILABLE,
+        "Stop is unavailable",
+        SOURCE_STOP,
+      )
       view?.setProcessPageStopError("Stop is unavailable")
       return
     }
 
     stopInFlight = true
+    DiagnosticsStore.stop = ProbeStatus(
+      CapabilityState.UNKNOWN,
+      "Stopping $packageName\u2026",
+      SOURCE_STOP,
+    )
     val generation = stopGeneration
     Log.i(TAG, "stop request pkg=$packageName")
     handler.post {
@@ -569,6 +719,11 @@ class OverlayService : Service() {
     }
     stopInFlight = false
     if (reply == "OK") {
+      DiagnosticsStore.stop = ProbeStatus(
+        CapabilityState.OK,
+        "Last stop: $packageName",
+        SOURCE_STOP,
+      )
       Log.i(TAG, "stop ok pkg=$packageName")
       startProcessScan(STOP_REFRESH_MESSAGE)
       return
@@ -578,6 +733,7 @@ class OverlayService : Service() {
       ?.trim()
       ?.ifEmpty { "Stop failed" }
       ?: "No response from Shizuku"
+    DiagnosticsStore.stop = ProbeStatus(CapabilityState.UNAVAILABLE, message, SOURCE_STOP)
     view?.setProcessPageStopError(message)
     Log.w(TAG, "stop failed: $message")
   }
@@ -639,12 +795,30 @@ class OverlayService : Service() {
     }
 
     override fun onProcessPageClosed() {
+      // Capture what the close invalidates: those probes would otherwise stay
+      // "scanning"/"stopping" with no page left to deliver a result (T19).
+      val scanWasInFlight = processScanInFlight
+      val stopWasInFlight = stopInFlight
       processPageOpen = false
       // Any result still on the main queue belongs to the closed page.
       processScanGeneration += 1
       processScanInFlight = false
       stopGeneration += 1
       stopInFlight = false
+      if (scanWasInFlight) {
+        DiagnosticsStore.meminfo = ProbeStatus(
+          CapabilityState.UNKNOWN,
+          "Scan cancelled \u2014 the process page closed.",
+          SOURCE_MEMINFO,
+        )
+      }
+      if (stopWasInFlight) {
+        DiagnosticsStore.stop = ProbeStatus(
+          CapabilityState.UNKNOWN,
+          "Stop result unknown \u2014 the process page closed.",
+          SOURCE_STOP,
+        )
+      }
     }
 
     override fun onProcessRefresh() {
@@ -662,6 +836,9 @@ class OverlayService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    // A restarted service must not inherit last-instance probes (T19); the
+    // diagnostics screen is process-scoped, the service is not.
+    DiagnosticsStore.clear()
     NotificationFactory.createChannel(this)
     ServiceCompat.startForeground(
       this,
@@ -739,7 +916,8 @@ class OverlayService : Service() {
     workerHandler?.removeCallbacks(pollRunnable)
     // Close on the worker so the source's owner thread stays the only thread
     // that touches it; quitSafely still delivers this queued message.
-    workerHandler?.post {
+    val teardownWorker = workerHandler
+    val teardownPosted = teardownWorker?.post {
       source?.close()
       source = null
       chain = null
@@ -751,10 +929,16 @@ class OverlayService : Service() {
       // Every row was flushed on append; closing only releases the file. A
       // recording still open when the service dies ends here like a stop.
       recorder.stop()
+      // Last writer: any poll queued before this message has finished, so a
+      // post-teardown fps write cannot survive (T19).
+      DiagnosticsStore.clear()
     }
     handlerThread?.quitSafely()
     handlerThread = null
     workerHandler = null
+    // No worker accepted the message (no handler, or its looper is already
+    // exiting), so clear here; otherwise the worker clear above is last (T19).
+    if (teardownPosted != true) DiagnosticsStore.clear()
 
     // Do not wait for a ~2 s dump: invalidate it, then let quitSafely deliver
     // nothing to a view that is about to be removed (T17).
@@ -1165,6 +1349,11 @@ class OverlayService : Service() {
 
     /** State text for the one rescan after a successful stop (T18). */
     private const val STOP_REFRESH_MESSAGE = "Stop requested \u2014 refreshing\u2026"
+
+    /** Probe sources shown in Diagnostics (T19). */
+    private const val SOURCE_FPS = "SurfaceFlinger"
+    private const val SOURCE_MEMINFO = "dumpsys meminfo"
+    private const val SOURCE_STOP = "am force-stop"
 
     const val ACTION_START = "dev.rsensors.android.overlay.START"
     const val ACTION_STOP = "dev.rsensors.android.overlay.STOP"

@@ -1,10 +1,12 @@
 package dev.rsensors.android.ui
 
+import android.app.ActivityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,16 +39,28 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.rsensors.android.core.CapabilityFacts
+import dev.rsensors.android.core.CapabilityRow
+import dev.rsensors.android.core.CapabilityState
 import dev.rsensors.android.core.DASH
+import dev.rsensors.android.core.ProbeStatus
+import dev.rsensors.android.core.RamUsage
+import dev.rsensors.android.core.ThermalStatus
 import dev.rsensors.android.core.ZoneCategory
+import dev.rsensors.android.core.buildCapabilities
 import dev.rsensors.android.core.fmtAge
+import dev.rsensors.android.core.fmtFps
 import dev.rsensors.android.core.fmtTemp
+import dev.rsensors.android.overlay.DiagnosticsStore
+import dev.rsensors.android.overlay.OverlayPreferences
 import dev.rsensors.android.overlay.OverlayService
 import dev.rsensors.android.overlay.ReadingStore
 import dev.rsensors.android.overlay.SourceSnapshot
 import dev.rsensors.android.overlay.ZoneOverrideStore
+import dev.rsensors.android.source.BatterySource
 import dev.rsensors.android.source.DirectReader
 import dev.rsensors.android.source.SysfsSource
+import dev.rsensors.android.source.ThermalStatusSource
 import dev.rsensors.android.source.ZoneReport
 import dev.rsensors.android.source.probeThermalZones
 import java.text.SimpleDateFormat
@@ -75,10 +89,17 @@ import rikka.shizuku.Shizuku
  * empty thermal directory renders an explanation, never a crash.
  *
  * Side effects: reads SharedPreferences, launches one short-lived executor per
- * activity, and writes the clipboard when Copy is pressed.
+ * activity, probes the battery, thermal status, RAM and the overlay's last shell
+ * probes, and writes the clipboard when Copy is pressed.
+ *
+ * T19 adds the "Feature status" table above the snapshot: one row per
+ * measurement or action with its state, source and the exact reason when it is
+ * not working. It is assembled by the pure [buildCapabilities] so the screen
+ * only gathers facts, and the same rows are appended to the clipboard report.
  */
 class DiagnosticsActivity : ComponentActivity() {
   private var snapshot by mutableStateOf<SourceSnapshot?>(null)
+  private var capabilities by mutableStateOf<List<CapabilityRow>>(emptyList())
   private var overlayRunning by mutableStateOf(false)
   private var zones by mutableStateOf<List<ZoneReport>>(emptyList())
   private var overrides by mutableStateOf<Map<String, ZoneCategory>>(emptyMap())
@@ -97,6 +118,7 @@ class DiagnosticsActivity : ComponentActivity() {
       RsensorsTheme {
         DiagnosticsScreen(
           snapshot = snapshot,
+          capabilities = capabilities,
           overlayRunning = overlayRunning,
           shizukuRunning = shizukuRunning,
           shizukuGranted = shizukuGranted,
@@ -135,8 +157,79 @@ class DiagnosticsActivity : ComponentActivity() {
     refreshedAt = System.currentTimeMillis()
     copied = false
     readShizukuState()
+    capabilities = buildCapabilities(buildFacts())
     probeZones()
   }
+
+  /**
+   * Collects the facts behind the feature table.
+   *
+   * Battery, thermal status and RAM are probed directly and need no Shizuku, so
+   * those rows stay truthful while the shell tier is down. Everything else comes
+   * from the last snapshot and [DiagnosticsStore], with the reading's FPS as the
+   * fallback before the store has one.
+   */
+  private fun buildFacts(): CapabilityFacts {
+    val current = snapshot
+    val reading = current?.reading
+    val battery = try {
+      BatterySource(this).poll(refreshedAt)
+    } catch (e: Exception) {
+      null
+    }
+    val thermal = try {
+      ThermalStatusSource(this).poll(refreshedAt)
+    } catch (e: Exception) {
+      null
+    }
+    val ram = readRam()
+    return CapabilityFacts(
+      sdkInt = Build.VERSION.SDK_INT,
+      demo = OverlayPreferences.isDemo(this),
+      overlayRunning = overlayRunning,
+      shizukuInstalled = shizukuVersion != null,
+      shizukuRunning = shizukuRunning,
+      shizukuGranted = shizukuGranted,
+      cpu = reading?.cpu,
+      gpu = reading?.gpu,
+      boardCount = reading?.board?.size ?: 0,
+      battery = battery?.battery,
+      thermalStatus = thermal?.thermalStatus ?: ThermalStatus.UNKNOWN,
+      sampleAgeMs = reading?.ageMillis(refreshedAt),
+      sourceName = reading?.sourceName.orEmpty(),
+      chainErrors = current?.chainErrors?.map { "${it.source}: ${it.message}" }.orEmpty(),
+      ramUsedBytes = ram?.usedBytes,
+      ramTotalBytes = ram?.totalBytes,
+      fps = DiagnosticsStore.fps ?: reading?.fps?.let {
+        ProbeStatus(CapabilityState.OK, "${fmtFps(it)} fps", "SurfaceFlinger")
+      },
+      meminfo = DiagnosticsStore.meminfo,
+      stop = DiagnosticsStore.stop,
+    )
+  }
+
+  /**
+   * One direct `ActivityManager.MemoryInfo` read for the RAM row.
+   *
+   * Mirrors the overlay's poll: a non-positive total is no figure at all, and a
+   * failed lookup leaves the row unavailable instead of crashing the screen.
+   * Needs no permission, so it survives a stopped Shizuku server.
+   */
+  private fun readRam(): RamUsage? =
+    try {
+      val info = ActivityManager.MemoryInfo()
+      getSystemService(ActivityManager::class.java).getMemoryInfo(info)
+      if (info.totalMem <= 0L) {
+        null
+      } else {
+        RamUsage(
+          usedBytes = (info.totalMem - info.availMem).coerceAtLeast(0L),
+          totalBytes = info.totalMem,
+        )
+      }
+    } catch (e: Exception) {
+      null
+    }
 
   /**
    * Reads Shizuku twice, each call guarded: `pingBinder` is false and
@@ -241,6 +334,10 @@ class DiagnosticsActivity : ComponentActivity() {
         "permission=${if (shizukuGranted) "granted" else "missing"}, " +
         "manager=${shizukuVersion ?: "not installed"}",
     )
+    report.appendLine("Feature status:")
+    capabilities.forEach { row ->
+      report.appendLine("  ${row.label}: ${row.state.name} [${row.source}] ${row.detail}")
+    }
     report.appendLine("thermal zones: ${zones.size}")
     zones.forEach { zone ->
       val celsius = zone.celsius?.let { String.format(Locale.US, "%.1f", it) } ?: DASH
@@ -264,6 +361,7 @@ private const val MAX_ERROR_LINES = 8
 @Composable
 private fun DiagnosticsScreen(
   snapshot: SourceSnapshot?,
+  capabilities: List<CapabilityRow>,
   overlayRunning: Boolean,
   shizukuRunning: Boolean,
   shizukuGranted: Boolean,
@@ -306,6 +404,9 @@ private fun DiagnosticsScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         item {
+          CapabilitiesSection(capabilities)
+        }
+        item {
           SnapshotSection(snapshot, overlayRunning, refreshedAt)
         }
         item {
@@ -339,6 +440,63 @@ private fun DiagnosticsScreen(
       }
     }
   }
+}
+
+/**
+ * The feature table: one compact row per measurement or action, above the
+ * snapshot so a broken feature is visible before its value.
+ */
+@Composable
+private fun CapabilitiesSection(rows: List<CapabilityRow>) {
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text("Feature status", style = MaterialTheme.typography.titleMedium)
+    rows.forEach { row -> CapabilityRowView(row) }
+  }
+}
+
+/**
+ * Label and state on one line, then source and detail in smaller text.
+ *
+ * The state word is the only colour signal; details stay in the body colour so
+ * a long reason is still readable. An empty source is omitted rather than drawn
+ * as a stray label.
+ */
+@Composable
+private fun CapabilityRowView(row: CapabilityRow) {
+  Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Text(row.label, style = MaterialTheme.typography.bodyMedium)
+      Text(
+        row.state.name,
+        style = MaterialTheme.typography.bodyMedium,
+        color = capabilityColor(row.state),
+      )
+    }
+    if (row.source.isNotBlank()) {
+      Text(
+        "Source ${row.source}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+      )
+    }
+    Text(
+      row.detail,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+    )
+  }
+}
+
+/** OK green, degraded amber, unavailable/blocked red, unknown gray. */
+private fun capabilityColor(state: CapabilityState): Color = when (state) {
+  CapabilityState.OK -> Color(Palette.green)
+  CapabilityState.DEGRADED -> Color(Palette.amber)
+  CapabilityState.UNAVAILABLE, CapabilityState.BLOCKED -> Color(Palette.red)
+  CapabilityState.UNKNOWN -> Color(Palette.gray)
 }
 
 @Composable

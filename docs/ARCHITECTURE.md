@@ -11,7 +11,7 @@ diagnostics and the Shizuku guide.
 | `core/` | pure Kotlin: `Reading`, thresholds, pill segments, formatting, FPS parsing, CSV sessions, chart geometry, visibility, ranges, process-memory PSS parsing/grouping/paging, the stop-risk policy, Shizuku version predicate |
 | `source/` | sensor sources, the source chain, the Shizuku runner, session storage |
 | `shizuku/` | `DumpsysUserService` and the AIDL contract executed as the shell user |
-| `overlay/` | foreground service, window, pill/card/process-page views, row selection and stop, notification, recording, preferences |
+| `overlay/` | foreground service, window, pill/card/process-page views, row selection and stop, notification, recording, preferences, Diagnostics probe store |
 | `ui/` | Compose activities: main, sessions, session detail, diagnostics, setup guide |
 
 ## Data flow
@@ -99,6 +99,27 @@ be opened or deleted. Deletion is permanent and confirmed.
   0–120 FPS axis, a legend that dims/restacks series, and a crosshair tooltip.
 - The card's 2-minute graph and min/max ranges use the same in-memory history.
 
+## Diagnostics
+
+`DiagnosticsActivity` shows the live snapshot, Shizuku state, source errors and
+the thermal-zone table. Its top "Feature status" table is one row per
+measurement/action: battery, thermal status, CPU/GPU, board sensors, FPS, RAM,
+process memory and Stop app. The decision is pure
+(`core/Capabilities.kt`): demo, Shizuku state and overlay state gate the shell
+rows; battery, thermal status and RAM are read directly and never need Shizuku.
+Values that are partial or older than `STALE_AFTER_MS` are degraded; a 0 fps
+sample is a valid idle measurement.
+
+The overlay publishes FPS (every poll), meminfo (each scan) and Stop (each
+attempt) probe results to `overlay/DiagnosticsStore.kt`, including the exact
+failure reason and whether the cause was a missing shell prerequisite
+(`shellBlocked`). Shell-blocked probes are cleared on Shizuku recovery and are
+ignored once the prerequisites pass, so a stale "needs Shizuku" reason cannot
+outlive the failure. Cancelled scans/stops publish a terminal state rather than
+leaving `Scanning…`/`Stopping…`; the store is cleared on service create and by
+the worker's final teardown post. The same rows are appended to the screen's
+Copy report.
+
 ## Shizuku
 
 `ShizukuDumpsysRunner` binds `DumpsysUserService` with
@@ -130,7 +151,7 @@ that combination and points at Diagnostics for the version.
 
 Pure logic is covered by JVM tests: formatting, thresholds, segments, FPS
 parsing/freshness, CSV v1/v2, session chart geometry, zone mapping, visibility,
-ranges, process-memory PSS parsing/grouping/paging, stop-risk tiers, and the
-version predicate. The suite is independent of a device. Overlay, Shizuku,
-recording, stop and UI behaviour are checked manually on the target phone; see
-`docs/BUILDING.md`.
+ranges, process-memory PSS parsing/grouping/paging, stop-risk tiers, capability
+status/reason precedence, and the version predicate. The suite is independent
+of a device. Overlay, Shizuku, recording, stop and UI behaviour are checked
+manually on the target phone; see `docs/BUILDING.md`.

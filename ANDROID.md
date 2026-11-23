@@ -4,12 +4,14 @@ Development design and task log. Public overview: [README.md](README.md);
 architecture summary: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Development evidence was archived outside this repository and is not bundled.
 
-Status: **T0-T18 complete.** The RAM pill, process-memory page and Stop app are
-committed on `feat/stop-app` (T17 is on the parent `feat/process-ram`) and
-installed/device-verified on the target (**280 tests**). The 0.2.0 release
-remains the published baseline and does not include these changes; nothing is
-merged or pushed yet. This file is the source of truth for the app; change it
-before changing code.
+Status: **T0-T19a complete in code.** The RAM pill, process-memory page and Stop
+app are committed on `feat/stop-app` (T17 is on the parent `feat/process-ram`)
+and installed/device-verified on the target (**280 tests** at T18). T19a adds
+the Diagnostics feature-status table on `feat/t19a-diagnostics` (**299 tests**,
+160 independent acceptance checks); its device checks are pending because the
+phone is not connected. The 0.2.0 release remains the published baseline and
+does not include these changes; nothing is merged or pushed yet. This file is
+the source of truth for the app; change it before changing code.
 
 ## 1. Goal
 
@@ -431,7 +433,8 @@ T9 (the expanded card) lands before T7 as well: it is the user-facing feature,
 and T7 can read the card's snapshot. T12/T13 (recording and the session graph)
 follow T9 and precede T7: they are the requested session feature. T14/T15 are
 post-release: FPS data first, then the overlay controls; T16 rebuilds the
-release. T17 adds the process-memory page after the RAM row and pill.
+release. T17 adds the process-memory page after the RAM row and pill. T19a adds
+the per-feature Diagnostics status table before the universality work.
 
 | # | Task | Acceptance |
 |---|---|---|
@@ -463,9 +466,45 @@ release. T17 adds the process-memory page after the RAM row and pill.
 | T16 ✅ | Release 0.2.0 | Installed and device-verified: versionCode 2 / 0.2.0, R8 + shrinking, 1,105,888 B, SHA-256 `4232C96E…EA0023`, v2 debug-signed. The Shizuku UserService/FPS path survives R8, the pill/card/guide/session graph/notification work, recording is v2, and the degraded `CPU/GPU — BAT 36° FPS —` prompt plus `Shizuku help` action recover after a server restart. 214 tests. |
 | T17 ✅ | Process memory page | RAM row opens a second page in the expanded card; `dumpsys meminfo --oom` PSS parsed shell-side; `Apps` groups by package and hides `Native`/`System`, `Processes` shows every row; 8 per page with prev/next; `Back`/`Refresh`; on-open + manual scans only; card 280 dp and restores 220 dp on back; no new permissions; unavailable state without Shizuku and in demo mode; parser fixtures; the pill keeps polling during a scan; 250 tests; device-verified: Apps 82 / Processes 270 rows sorted by PSS, pager `1–8`/`9–16`, Refresh scans, no-Shizuku state + Start Shizuku, recovery after `start.sh`, and the header keeps all four metrics + dot (10 sp card / 12 sp page) |
 | T18 ✅ | Stop app | Tap-select a process/app row with a highlight and selection bar; Stop always confirms; Apps and Processes both supported (Processes says Stop app and warns the whole package stops; native protected); tiered `StopPolicy` — protected: self, Shizuku, native/no package, UID < 10000, core denylist, persistent, Native/System/Persistent/Persistent Service; warning: system/updated-system/privileged including AICore, foreground/visible, launcher, IME, GMS; normal: cached/background; `am force-stop <validated package>` through Shizuku AIDL version 5, no raw kill; one rescan after a stop; 280 tests; device-verified: AICore selected as `WARNING · On-device AI…`, confirmed `Stop AICore?`, `stopPackage … exit=0 reply=OK`, AICore pid gone, one rescan 266 rows, RAM 8.7G→7.1G, poll still running; protected `system` row showed a padlock + `PROTECTED · Core system process.` with no Stop; warning/protected bars show the package on its own line; Cancel restored the footer; Processes warning row showed the `Stop app` label; no crash; warning confirmation shows the full package + reason + `This stops every process of the app.` with no truncation |
+| T19a ✅ | Diagnostics feature status | "Feature status" table above the snapshot: eight rows (battery, thermal status, CPU/GPU, board, FPS, RAM, process memory, Stop app), each with state, source and exact reason; precedence demo → Shizuku installed/running/permission → overlay → probe/value; battery/thermal/RAM stay tier 0; FPS probe every poll and meminfo/stop last-attempt probes with `shellBlocked` recovery clearing; cancelled scans/stops get terminal states; no new permissions, dependencies or measurement behaviour; 299 tests; 160 independent acceptance checks; device verification pending (phone not connected) |
 
-T0-T18 are complete. T17 is committed on `feat/process-ram`; T18 is stacked on
-`feat/stop-app`; nothing is merged or pushed.
+T0-T19a are complete in code. T17 is committed on `feat/process-ram`; T18 is
+stacked on `feat/stop-app`; T19a is stacked on `feat/t19a-diagnostics`; nothing
+is merged or pushed.
+
+### T19a feature status (2026-11-23)
+
+Diagnostics now opens with a "Feature status" table. Each row is one
+measurement or action the app can show, not one source: battery temperature,
+thermal status, CPU/GPU temperature, board sensors, FPS, system RAM, process
+memory and Stop app. The row carries `OK`, `DEGRADED`, `UNAVAILABLE`, `BLOCKED`
+or `UNKNOWN`, the source (`BatteryManager`, `PowerManager`, `dumpsys
+thermalservice`, `SurfaceFlinger`, `dumpsys meminfo`, `am force-stop`,
+`ActivityManager`), and the exact reason when it is not working. The Copy report
+contains the same rows.
+
+The decision is pure (`core/Capabilities.kt`): demo, then Shizuku
+installed/running/permission, then overlay running, then the feature probe or
+value. Battery, thermal status and system RAM never depend on the shell. A
+partial CPU/GPU pair or a sample older than `STALE_AFTER_MS` is `DEGRADED`; a
+0 fps sample is `OK` (idle screen), not a failure. CPU/GPU with no value and no
+source error says so explicitly instead of drawing two dashes.
+
+The overlay publishes optional shell probes to `overlay/DiagnosticsStore.kt`:
+FPS every poll, meminfo and Stop on each attempt. A probe caused by a missing
+shell prerequisite is marked `shellBlocked`; when Shizuku recovers, only those
+probes are cleared, and the table ignores a shell-blocked probe once the gates
+pass, so a stale "needs Shizuku" reason cannot outlive the failure. Cancelling a
+scan (screen off, page close) or closing the page during a stop writes a terminal
+probe instead of leaving `Scanning…`/`Stopping…` forever.
+A protected stop is `DEGRADED` ("Last attempt blocked: `<pkg>` is protected."),
+not a global Stop failure. The store is cleared on service create and after the
+worker's final poll on teardown.
+
+No permission, manifest, dependency or measurement behaviour changed. The JVM
+suite covers the pure rules (299 tests); `tests/acceptance/CapabilitiesAcceptance.kt`
+holds 160 independent checks. Device rendering, clipboard output and the live
+service transitions remain unverified until the phone is connected.
 
 ### T17 process-memory probe (2026-11-23)
 
