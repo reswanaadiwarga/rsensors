@@ -146,6 +146,28 @@ class FpsParseTest {
   }
 
   @Test
+  fun `focused component reads a window displays focus line`() {
+    // `dumpsys window displays` is the light focus source the drawing-cache
+    // check uses (T19b-6). It prints the same mFocusedApp record inside the
+    // display block, among window-manager noise, and the lighter dump also
+    // carries mCurrentFocus; mFocusedApp must still win.
+    val dump = listOf(
+      "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)",
+      "  Display: mDisplayId=0 root=0x1",
+      "    mDisplayInfo=DisplayInfo{\"Built-in Screen\", uniqueId=\"local:0\", " +
+        "app 1080 x 2400, real 1080 x 2400}",
+      "    mDisplayFrames=DisplayFrames{w=1080, h=2400}",
+      "    mCurrentFocus=Window{81c33ba u0 " +
+        "com.mi.android.globallauncher/com.miui.home.launcher.Launcher}",
+      "    mFocusedApp=ActivityRecord{230081998 u0 $settingsComponent t5643}",
+      "    mInputMethodWindow=Window{2c31385 u0 " +
+        "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME}",
+    ).joinToString("\n")
+
+    assertEquals(settingsComponent, parseFocusedComponent(dump))
+  }
+
+  @Test
   fun `focused component reads a plain legacy focus line`() {
     // Android 8 prints `AppWindowToken{hash token=Token{hash ActivityRecord{...}}}`;
     // older dumps are just `mFocusedApp=... u<id> pkg/cls ...`.

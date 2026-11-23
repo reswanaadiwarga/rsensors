@@ -25,7 +25,10 @@ import java.io.IOException
  * [dev.rsensors.android.core.parseDumpsysThermal]. [runFps] resolves the focused
  * activity's SurfaceFlinger layer and measures its frame rate with
  * `dumpsys SurfaceFlinger --list/--latency`, returning the one-line reply the
- * app parses with [dev.rsensors.android.core.parseFpsReply]. [runMeminfo] runs
+ * app parses with [dev.rsensors.android.core.parseFpsReply]. While that layer is
+ * drawing it also reads `dumpsys window displays` so an app switch is corrected
+ * within one poll (T19b-6); a stale layer keeps the 4 s resolve gate.
+ * [runMeminfo] runs
  * `dumpsys meminfo --oom` and returns its raw stdout for the T17 process page
  * ([dev.rsensors.android.core.parseMeminfoPss]); when that dump yields no PSS
  * rows it falls back to `ps -A -o PID,RSS,NAME` so the page still has data
@@ -106,10 +109,13 @@ class DumpsysUserService : IDumpsysService.Stub {
    * Measures the foreground app's frame rate for this poll.
    *
    * While the cached layer keeps producing fresh frames only its `--latency`
-   * call runs (~90 ms). When the ring is stale the component and candidate
-   * layers are re-resolved — `dumpsys window` plus `--list` — at most once
-   * every [RESOLVE_INTERVAL_MS], so an idle foreground app cannot turn the
-   * overlay into a dumpsys loop (ANDROID.md §8 T14).
+   * call runs (~90 ms), plus a light `dumpsys window displays` focus read
+   * (~74 ms on the target) that catches an app switch within one poll instead
+   * of reporting the previous app's layer until the gate expires (T19b-6). When
+   * the ring is stale the component and candidate layers are re-resolved —
+   * `dumpsys window` plus `--list` — at most once every [RESOLVE_INTERVAL_MS],
+   * so an idle foreground app cannot turn the overlay into a dumpsys loop
+   * (ANDROID.md §8 T14).
    *
    * Freshness is judged against `System.nanoTime()`, the same CLOCK_MONOTONIC
    * domain as the latency rows; a stopped app's frozen ring is 0 fps, not its
@@ -322,47 +328,106 @@ class DumpsysUserService : IDumpsysService.Stub {
   private data class Resolved(val measurement: FpsMeasurement, val layer: String?)
 
   /**
-   * Cached layer and the last full resolve, guarded by the synchronized
-   * [runFps]. The layer stays cached through idle polls so the 4 s re-resolve
-   * gate, not the poll cadence, decides when `dumpsys window` runs again.
+   * Cached layer, the component it was resolved from and the last full resolve,
+   * guarded by the synchronized [runFps]. The layer stays cached through idle
+   * polls so the 4 s re-resolve gate, not the poll cadence, decides when
+   * `dumpsys window` runs again. [cachedComponent] is what [cachedLayer] was
+   * resolved from, so a still-drawing layer can be recognised as the previous
+   * app's after a switch (T19b-6); both fields are set and cleared together.
    */
   private var cachedLayer: String? = null
+  private var cachedComponent: String? = null
   private var lastResolveNanos: Long? = null
 
+  /**
+   * One measurement for this poll.
+   *
+   * The cached layer is reused while it has two fresh frames, but a drawing
+   * layer outlives an app switch: the light `displays` focus read then detects
+   * the new foreground component and forces an immediate re-resolve, reusing
+   * that read instead of paying a full `dumpsys window` (T19b-6). A stale or
+   * idle layer skips the focus read entirely and falls back to the 4 s gate.
+   */
   private fun resolveAndMeasure(): Resolved {
     cachedLayer?.let { layer ->
       val rows = latencyRows(layer)
       if (rows != null) {
         val measured = measureFps(rows, System.nanoTime())
-        if (measured.frames >= 2) return Resolved(measured, layer)
+        if (measured.frames >= 2) {
+          val cachedFocus = cachedComponent
+          // No component cannot identify a switch; keep today's best effort
+          // answer rather than spending a dump on every drawing poll.
+          if (cachedFocus == null) return Resolved(measured, layer)
+          // An unreadable focus is also best effort: a focus-dump failure must
+          // not blank FPS, so the cached measurement still wins.
+          val focus = focusDumpOrNull()?.let(::parseFocusedComponent)
+          if (focus != null && focus != cachedFocus) {
+            Log.i(TAG, "focus changed, re-resolving: $cachedFocus -> $focus")
+            return resolveLayers(focus, System.nanoTime())
+          }
+          return Resolved(measured, layer)
+        }
       }
     }
 
     val now = System.nanoTime()
     val last = lastResolveNanos
-    if (last == null || now - last >= RESOLVE_INTERVAL_NANOS) {
-      lastResolveNanos = now
-      val component = parseFocusedComponent(runDumpsys("window"))
-        ?: return Resolved(IDLE, null)
-      val candidates = parseCandidateLayers(runDumpsys("SurfaceFlinger", "--list"), component)
-      if (candidates.isEmpty()) {
-        cachedLayer = null
-        return Resolved(IDLE, null)
-      }
-      // Cache the first candidate even when it is idle right now; the next
-      // poll retries it before spending another window/list pair.
-      cachedLayer = candidates.first()
-      for (candidate in candidates) {
-        val rows = latencyRows(candidate) ?: continue
-        val measured = measureFps(rows, System.nanoTime())
-        if (measured.frames >= 2) {
-          cachedLayer = candidate
-          return Resolved(measured, candidate)
-        }
+    if (last != null && now - last < RESOLVE_INTERVAL_NANOS) return Resolved(IDLE, null)
+    lastResolveNanos = now
+    val component = parseFocusedComponent(runDumpsys("window")) ?: return Resolved(IDLE, null)
+    return resolveLayers(component, now)
+  }
+
+  /**
+   * Resolves [component]'s frame-carrying layers, caches the first candidate and
+   * returns the first one with fresh frames.
+   *
+   * The caller has already read the focus, so a changed-focus poll needs one
+   * `--list` call only, not a second window dump. Caching the first candidate
+   * even when it is idle right now lets the next poll retry it before spending
+   * another resolve, and keeps [cachedLayer] and [cachedComponent] consistent.
+   *
+   * @param component `<pkg>/<class>` from [parseFocusedComponent]
+   * @param now resolve time for the gate, measured before the dumps ran
+   * @return the fresh measurement, or [IDLE] when no candidate carries fresh
+   *   frames; a component with no candidate layers also clears the cache
+   */
+  private fun resolveLayers(component: String, now: Long): Resolved {
+    lastResolveNanos = now
+    val candidates = parseCandidateLayers(runDumpsys("SurfaceFlinger", "--list"), component)
+    if (candidates.isEmpty()) {
+      cachedLayer = null
+      cachedComponent = null
+      return Resolved(IDLE, null)
+    }
+    // Cache the first candidate even when it is idle right now; the next
+    // poll retries it before spending another window/list pair.
+    cachedLayer = candidates.first()
+    cachedComponent = component
+    for (candidate in candidates) {
+      val rows = latencyRows(candidate) ?: continue
+      val measured = measureFps(rows, System.nanoTime())
+      if (measured.frames >= 2) {
+        cachedLayer = candidate
+        return Resolved(measured, candidate)
       }
     }
     return Resolved(IDLE, null)
   }
+
+  /**
+   * The current focus from the lighter `dumpsys window displays` dump (22k
+   * chars / ~74 ms on the target, against 78k / ~135 ms for the full dump), or
+   * null when the dump fails. A focus failure must not blank FPS, so the caller
+   * falls back to the cached measurement.
+   */
+  private fun focusDumpOrNull(): String? =
+    try {
+      runDumpsys("window", "displays")
+    } catch (e: Exception) {
+      Log.w(TAG, "focus check failed; keeping cached FPS", e)
+      null
+    }
 
   /**
    * `--latency` for [layer], or null when the process cannot run or the layer

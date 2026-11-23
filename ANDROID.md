@@ -6,10 +6,10 @@ Development evidence was archived outside this repository and is not bundled.
 
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
 T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening, T19b-5
-dynamic FPS axis, T19c-1 OEM stop denylist, T19c-2 post-stop verification,
-T19c-3a shell UID enrichment, T19c-3b on-demand hidden-package flags, T19d-1
-brand-aware setup guidance and T19d-2 manual Manage apps route, complete in
-code.**
+dynamic FPS axis, T19b-6 FPS cache invalidation, T19c-1 OEM stop denylist,
+T19c-2 post-stop verification, T19c-3a shell UID enrichment, T19c-3b on-demand
+hidden-package flags, T19d-1 brand-aware setup guidance and T19d-2 manual
+Manage apps route, complete in code.**
 The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
 (T17 is on the parent `feat/process-ram`) and installed/device-verified on the
 target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
@@ -19,12 +19,11 @@ with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
 T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
 (**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
 The Shizuku 13.5.4 guide update adds 1 (**393 total**); T19c-3a adds 8
-(**401 total**); T19c-3b adds 15 (**416 total**).
+(**401 total**); T19c-3b adds 15 (**416 total**); T19b-6 adds 1 (**417 total**).
 All are on local `main`. Device evidence is Android 16 only where available;
-normal UserService transport is currently blocked by Shizuku 13.6.0. The 0.2.0
-release remains the published baseline and does not include these changes.
-Nothing is pushed. This file is the source of truth for the app; change it
-before changing code.
+Shizuku 13.5.4 is restored and normal transport works. The 0.2.0 release remains
+the published baseline and does not include these changes. Nothing is pushed.
+This file is the source of truth for the app; change it before changing code.
 
 ## Verification scope
 
@@ -550,6 +549,7 @@ the per-feature Diagnostics status table before the universality work.
 | T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only; the production Shizuku UserService is currently blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE, so the normal-transport `ps` fallback is not device-verified. |
 | T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified because Shizuku 13.6.0 blocks the normal UserService transport. |
 | T19b-5 ✅ | Dynamic FPS axis | Session graph and card sparkline use a 120 fps baseline raised in 30 fps steps (150/180/…/500) from the recorded peak; 120 is still the default. v1/no-FPS sessions still hide the axis. 392 tests; 53 independent acceptance checks; parent-red + mutation-red. Real 144/165 Hz rendering remains device-unverified. |
+| T19b-6 ✅ | FPS cache invalidation | When the cached SurfaceFlinger layer still has two fresh frames, the service reads focus from the lighter `dumpsys window displays`; a readable changed focus bypasses the 4 s gate and re-resolves immediately, reusing that focus read. Focus failure keeps the cached FPS; stale/idle layers skip the extra dump and keep the 4 s path. 417 tests; 6 independent acceptance checks; mutation-red. Device: Settings 60 → Launcher 115 within one poll, idle 0 for 5/5 polls, no crash. Other Android versions whose `displays` dump omits `mFocusedApp` fall back to the old 4 s behaviour. |
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
 | T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
 | T19c-3a ✅ | Shell UID enrichment | The AIDL adds `runProcessUids() = 5` and the UserService registration moves to `version(6)`. `DumpsysUserService.runProcessUids` runs `/system/bin/ps -A -o PID,UID,NAME` (absolute path, argv array, read to EOF before waiting) and returns raw stdout; the runner returns null on Shizuku/binder failure like `runMeminfo`. Pure `parsePsUid` locates `PID`/`UID`/`NAME` (or `CMD`/`COMMAND`) by header position, case-insensitively, accepts only positive pids and non-negative numeric UIDs, skips malformed rows and keeps the last duplicate pid; `attachUids` copies rows with matching UIDs and preserves order/fields without mutating. The scan attaches the table to the snapshot on the meminfo thread, and `groupApps` carries the first non-null member UID. The stop target uses `ApplicationInfo.uid` when visible, otherwise the row UID, so a hidden core process with UID < 10000 is PROTECTED; T19c-3b later adds the system/persistent flags on demand. A failed UID command keeps null UIDs and the scan continues. 401 tests. Device-verified: the target printed numeric UIDs for all 1050 rows, a 296-row process scan attached them and paged without a crash, and Diagnostics showed the scan. Hidden-core-row protection remains manual; T19c-3b now resolves the system/persistent flags on demand for the selected hidden package. |
@@ -691,7 +691,9 @@ Confirmed rules:
   older dumps use `AppWindowToken{…}` or a generic `mFocusedApp=… u<id>
   <pkg>/<class> …` record. A leading `.` in the class is expanded against the
   package (`com.android.settings/.MiuiSettings` becomes
-  `com.android.settings/com.android.settings.MiuiSettings`).
+  `com.android.settings/com.android.settings.MiuiSettings`). The lighter
+  `dumpsys window displays` dump carries the same `mFocusedApp` line and is the
+  focus source for the drawing-cache check below (T19b-6).
 - `dumpsys SurfaceFlinger --list` prints `RequestedLayerState{<name> …}` on
   Android 15+ and a bare `<name>` line on Android 8–14; both are parsed. A name
   may start with a `<hex> ` layer-id prefix, which is ignored for matching but
@@ -718,11 +720,22 @@ Confirmed rules:
   clock: a frame is fresh when `now - actualPresent <= 1500 ms`. With fewer
   than two fresh frames the FPS is `0`; otherwise
   `fps = (fresh - 1) / (newest - oldest)` in seconds.
-- Cost, measured through adb: `dumpsys window` ~136 ms, `--list` ~88 ms, one
-  `--latency` ~90 ms. While the cached layer keeps producing fresh frames only
-  the `--latency` call runs. When it goes stale, re-resolve the component and
-  layers, at most once every 4 s, so an idle foreground app does not turn the
-  overlay into a dumpsys loop.
+- Cost, measured on the target only (not a claim for other phones):
+  `dumpsys window` ~136 ms / 78k chars, `dumpsys window displays` ~74 ms / 22k
+  chars, `--list` ~88 ms, one `--latency` ~90 ms. While the cached layer keeps
+  producing fresh frames only the `--latency` call runs plus the lighter
+  `displays` focus read. When the cached layer is stale or idle the focus read
+  is skipped and re-resolving the component and layers still happens at most
+  once every 4 s, so an idle foreground app does not turn the overlay into a
+  dumpsys loop.
+- The cached layer outlives an app switch: while it still has two fresh frames
+  its component is compared with the current focus, and a readable, different
+  focus bypasses the 4 s gate to re-resolve the component and layers
+  immediately, reusing that focus read instead of dumping `window` twice. The
+  FPS row therefore corrects to the new app within one poll instead of showing
+  the previous app's rate for up to 4 s. A matching focus, an unreadable focus
+  dump or a cache with no component returns the cached measurement: the check
+  is best effort and a focus-dump failure never blanks FPS.
 - 1.5 s window at the 2 s expanded poll (5 s collapsed). The value is the
   foreground app's frame rate; the overlay's own frames are never counted.
 - Candidate preference: a fresh `SurfaceView[...](BLAST)` layer wins (that is
@@ -787,7 +800,10 @@ Defaults are chosen; change them now, not during implementation.
   layer; the overlay's own frames are irrelevant. The UserService resolves the
   component from `dumpsys window`'s `mFocusedApp`, judges freshness against
   `System.nanoTime()` (1.5 s window), and reports 0 for an idle app, `—` only
-  when the shell route is unavailable. Adding `runFps` to the AIDL bumps the
+  when the shell route is unavailable. While the cached layer is drawing it also
+  reads the focus with the lighter `dumpsys window displays` and re-resolves
+  immediately when the app changed (T19b-6); a stale or idle layer still uses
+  the 4 s gate. Adding `runFps` to the AIDL bumps the
   UserService registration to `version(3)` so a stale v2 shell process cannot
   answer the new call.
 - FPS thresholds: below 30 red, below 50 amber, otherwise green. The session

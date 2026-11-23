@@ -26,7 +26,7 @@ gradlew.bat :app:lintDebug
 gradlew.bat :app:assembleDebug
 ```
 
-Latest result: **416 JVM tests, 34 suites, 0 failures/errors/skipped**; lint and
+Latest result: **417 JVM tests, 34 suites, 0 failures/errors/skipped**; lint and
 assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 
 ## Feature matrix
@@ -40,7 +40,7 @@ assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 | Diagnostics feature status | Yes | — | Verified on target (forced-RSS shim for the RSS path) |
 | OEM autostart/Shizuku guidance, Manage apps fallback | Yes | — | Guidance is code/UI reviewed; Manage apps opened the HyperOS app list and returned without a crash |
 | CPU/GPU temperatures | No | `dumpsys thermalservice` | Verified on target with 13.5.4 (historical); transport restored, not re-run in the latest pass. Parser hardening is JVM-tested |
-| Foreground FPS | No | SurfaceFlinger | Verified on target with 13.5.4 (historical 0/53/60/120 fps); transport restored, not re-run in the latest pass. Android 8–14/17 formats are fixture-only |
+| Foreground FPS | No | SurfaceFlinger | Verified on target with 13.5.4, including app-switch correction: Settings 60 → Launcher 115 within one poll, idle 0 across 5 polls. Android 8–14/17 formats and non-13.6/HyperOS focus shapes remain fixture/manual-only |
 | Per-process PSS/RSS | No | `dumpsys meminfo` / `ps` | PSS + shell UID table re-verified on 13.5.4: 296-row scan, 1050 numeric UID rows, pager and Diagnostics OK. RSS UI/source verified through a forced shim; normal `ps` fallback not forced |
 | Hidden-package flags | No | `dumpsys package <pkg>` | Device: hidden Apps rows showed `Resolving app details…`, then resolved SYSTEM; real dumps matched parser for Settings/Chrome/YouTube/android. Hidden Processes rows remain protected as unresolved |
 | Stop app | No | `am force-stop` + `ps` verification | Stop verified on target with 13.5.4 (historical); post-stop verification is code/JVM-tested, normal transport restored but not re-run in the latest pass |
@@ -54,10 +54,11 @@ assemble green. Independent acceptance harnesses live in `tests/acceptance/`.
 - A second physical device; the emulator/API matrix was not run.
 - HAL `HAL Ready`/cached/partial thermal dumps and extra sysfs paths
   (`hwmon`, `devfreq`, `kgsl`, Mali/GED, Samsung `gpu_tmu`, `power_supply`).
-- The shell `ps` fallback, package resolver and post-stop verification on the
-  normal Shizuku transport while 13.6.0 is installed.
-- `gfxinfo` / TimeStats FPS fallbacks, previous-app cache invalidation and
-  period-only `deprecate_frame_tracker` rows.
+- The shell `ps` fallback and post-stop verification end-to-end on another
+  device; the target's 13.5.4 transport is working, but those paths were not
+  re-forced in the latest pass.
+- `gfxinfo` / TimeStats FPS fallbacks and period-only
+  `deprecate_frame_tracker` rows.
 - Real high-refresh graph rendering and TalkBack/link opening on other devices.
 
 ## Reading rule
