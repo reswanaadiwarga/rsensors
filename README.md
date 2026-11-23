@@ -213,6 +213,10 @@ statement for other phones.
   per-feature state and reason instead of claiming the feature works there.
 - CPU/GPU temperatures and FPS require Shizuku. Without it the pill shows
   `CPU/GPU —` and `FPS —` alongside the battery value.
+- When Shizuku is unavailable, stop an app by hand: **Manage apps** on the main
+  screen opens Android's app list, where you can open the app and tap **Force
+  stop**. Android asks for confirmation; Rsensors cannot verify or undo that
+  stop.
 - FPS is the focused app's presented frame rate. A static app reports 0; the
   display's refresh rate is not reported.
 - Screen-off pauses polling, so a recording has a gap while the phone sleeps.

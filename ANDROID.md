@@ -6,8 +6,9 @@ Development evidence was archived outside this repository and is not bundled.
 
 Status: **T0-T19a plus the record toggle, snap toggle, T19b-1 FPS parser,
 T19b-2 meminfo parser, T19b-3 RSS fallback, T19b-4 thermal hardening, T19b-5
-dynamic FPS axis, T19c-1 OEM stop denylist, T19c-2 post-stop verification and
-T19d-1 brand-aware setup guidance, complete in code.**
+dynamic FPS axis, T19c-1 OEM stop denylist, T19c-2 post-stop verification,
+T19d-1 brand-aware setup guidance and T19d-2 manual Manage apps route, complete
+in code.**
 The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
 (T17 is on the parent `feat/process-ram`) and installed/device-verified on the
 target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
@@ -169,6 +170,11 @@ nice-to-haves:
   package's processes stop. Native rows are protected. After a stop the page
   rescans once and shows `Stop requested` or the failure; a system app that
   restarts simply reappears. No raw `kill`, no undo.
+- **Manage apps** (main screen): the manual fallback when Shizuku is
+  unavailable. It opens Android's app list; the user opens the app's info page
+  and taps Force stop. Android asks for confirmation and performs the stop, and
+  Rsensors cannot verify or undo it. No permission, no package list and no
+  programmatic stop.
 - **FPS**: the foreground app's frame rate, measured through Shizuku's
   UserService with `dumpsys SurfaceFlinger --list/--latency` for the top
   activity's layer — never the overlay's own frames. Without Shizuku the value
@@ -545,11 +551,30 @@ the per-feature Diagnostics status table before the universality work.
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
 | T19c-2 ✅ | Post-stop verification | `am force-stop` exit 0 is no longer proof: on success the shell ignores benign output, reads `ps -A -o PID,RSS,NAME`, and returns `ERR still running: …` when the package or a `package:` child survives; otherwise `OK`. A failed `ps` returns `OK` with a verification-unavailable log and the page rescan remains the fallback. `stillRunningProcesses` is exact/colon-boundary only, trimmed, order-preserving. 369 tests; 13 independent acceptance checks; parent-red + mutation-red. Real `am` wording, restart races and SELinux `ps` denial remain device-unverified. |
 | T19d-1 ✅ | Brand-aware setup guidance | New pure `core/OemGuidance.kt`: `oemFamily(Build.MANUFACTURER, Build.BRAND)` checks the manufacturer before the brand, ignores case and surrounding spaces, and maps Xiaomi/Redmi/POCO, Samsung, Huawei/HONOR, Oppo/OnePlus/Realme/ColorOS, vivo/iQOO and stock-like makers (Google/AOSP/Motorola/Sony/Asus/Nothing) to a family; unknown, blank and `null` fall back to `OTHER`. The main screen's "At boot" paragraph and the guide's "After a reboot" note now show the family copy instead of HyperOS-only text, and the XIAOMI copy keeps the original HyperOS wording. README gains a compatibility-notes table. 387 tests; no device. Real OEM setting labels and behaviour remain device-unverified, and HarmonyOS NEXT cannot run Android APKs. |
+| T19d-2 ✅ | Manual Manage apps fallback | Tier 0 escape hatch for phones without the Shizuku shell route: an `OutlinedButton` labelled `Manage apps` on the main screen opens Android's app list, where the user opens an app's info page and taps `Force stop` by hand. API 29+ launches `Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS` and falls back to `Settings.ACTION_APPLICATION_SETTINGS` when that launch throws; both attempts are guarded, so a missing Settings activity cannot crash the app. The copy states that Android asks for confirmation and Rsensors cannot verify or undo the stop, and no code reads a result. No new permission, no `QUERY_ALL_PACKAGES`, no package list, and no Shizuku/shell/process-page change. UI-only; 393 tests unchanged. Device-checked on the target: the intent opened HyperOS's `Apps` screen (`com.miui.securitycenter/.appmanager.AppManagerMainActivity`), Back returned to the main screen without a crash, and logcat showed no FATAL/ANR. The vendor may substitute the settings activity; still not a universal or device-verified claim for other phones. |
 
 T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19c-1/T19c-2/T19d-1
 slices are complete in code on `main`. T17/T18/T19a are ancestors of `main` from
 their feature branches; record, snap, all four T19b slices, both T19c slices and
-T19d-1 are merged. Nothing is pushed.
+T19d-1/T19d-2 are merged.
+Nothing is pushed.
+
+### T19d-2 manual Manage apps (2026-11-24)
+
+`Manage apps` on the main screen is the tier-0 fallback for stopping an app when
+Shizuku's shell route is unavailable. It opens Android's app list
+(`Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS` on API 29+,
+`Settings.ACTION_APPLICATION_SETTINGS` when that launch throws) and leaves the
+stop to the user: pick the app, open its info page, `Force stop`, confirm.
+Rsensors cannot observe or undo the result, so neither the UI nor Diagnostics
+claims a stop; this is not the T18 programmatic stop and it does not touch the
+Shizuku, AIDL or process-page path. On the target phone the intent resolves to
+HyperOS's `Apps` app manager (`com.miui.securitycenter`) rather than AOSP
+Settings, and Back returns to the main screen. No new permission, no
+`QUERY_ALL_PACKAGES` and no package-visibility change; the button always shows,
+with copy that frames it as the Shizuku-unavailable fallback. Other phones may
+map these actions to a different screen, so this is a device-checked route on
+the target only, not a universal or device-verified claim for other phones.
 
 ### T19a feature status (2026-11-23)
 

@@ -62,6 +62,10 @@ import rikka.shizuku.Shizuku
  * [OverlayService], and writes the demo and boot flags through
  * [OverlayPreferences].
  *
+ * T19d-2 adds the manual `Manage apps` route: Android's own app list, where the
+ * user can Force stop an app without Shizuku. The app only opens the screen; it
+ * cannot observe or undo the result, so no code claims the app was stopped.
+ *
  * T10 adds the "At boot" section: a persisted switch that
  * [dev.rsensors.android.boot.BootReceiver] reads after a reboot, and the
  * brand-aware autostart guidance from
@@ -142,6 +146,7 @@ class MainActivity : ComponentActivity() {
           onBootChange = ::updateBootEnabled,
           onSnapChange = ::updateSnapToEdge,
           onOpenAppSettings = ::openAppSettings,
+          onOpenManageApps = ::openManageApps,
           onOpenShizuku = ::openShizuku,
           onRequestShizuku = ::requestShizukuPermission,
           onOpenShizukuHelp = ::openShizukuHelp,
@@ -252,6 +257,49 @@ class MainActivity : ComponentActivity() {
       ),
     )
   }
+
+  /**
+   * Opens Android's app list for a manual Force stop (ANDROID.md §8 T19d-2).
+   *
+   * This is the tier-0 escape hatch for phones where the Shizuku shell route is
+   * unavailable: the user picks the app, opens its app info and taps Force stop.
+   * Android draws its own confirmation and performs the stop, so the app neither
+   * needs a permission nor can observe the outcome. It deliberately does not
+   * list packages itself: no `QUERY_ALL_PACKAGES`, no package table.
+   *
+   * API 29+ has a dedicated app-list screen; older releases fall back to the
+   * general application settings page. Both launches are guarded because a
+   * missing Settings activity must not crash the app.
+   */
+  private fun openManageApps() {
+    val opened = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      launchSettings(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
+    } else {
+      false
+    }
+    if (!opened) launchSettings(Settings.ACTION_APPLICATION_SETTINGS)
+  }
+
+  /**
+   * Launches one settings action through [systemSettingsLauncher].
+   *
+   * Resolution and the launch share this guarded call: an action with no
+   * matching activity surfaces as [android.content.ActivityNotFoundException].
+   * A `resolveActivity` pre-check is deliberately not used because package
+   * visibility can hide a system Settings activity from the app while an
+   * implicit launch still resolves, which would silently downgrade every
+   * Android 11+ device to the fallback screen.
+   *
+   * @return true when the activity was launched; false lets the caller fall back
+   * @sideeffect starts an activity whose result triggers [refreshState]
+   */
+  private fun launchSettings(action: String): Boolean =
+    try {
+      systemSettingsLauncher.launch(Intent(action))
+      true
+    } catch (e: Exception) {
+      false
+    }
 
   private fun requestNotifications() {
     // The button is only shown from API 33, but guard the constant here so the
@@ -396,6 +444,7 @@ private fun HomeScreen(
   onBootChange: (Boolean) -> Unit,
   onSnapChange: (Boolean) -> Unit,
   onOpenAppSettings: () -> Unit,
+  onOpenManageApps: () -> Unit,
   onOpenShizuku: () -> Unit,
   onRequestShizuku: () -> Unit,
   onOpenShizukuHelp: () -> Unit,
@@ -565,6 +614,21 @@ private fun HomeScreen(
       OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {
         Text("Diagnostics")
       }
+
+      // Tier-0 escape hatch (T19d-2): Android's own app list, where the user
+      // Force stops an app by hand when the Shizuku shell route is unavailable.
+      // Android confirms the stop and the app cannot observe it, so the copy
+      // must not promise a result.
+      OutlinedButton(onClick = onOpenManageApps, modifier = Modifier.fillMaxWidth()) {
+        Text("Manage apps")
+      }
+      Text(
+        "Manual fallback when Shizuku is unavailable: open the app's info page " +
+          "and tap Force stop. Android asks for confirmation; Rsensors cannot " +
+          "verify or undo the stop.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+      )
 
       Row(
         modifier = Modifier.fillMaxWidth(),
