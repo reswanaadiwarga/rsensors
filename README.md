@@ -2,8 +2,10 @@
 
 A floating overlay for Android that shows live CPU/GPU/battery temperatures, the
 foreground app's frame rate, and per-app memory usage — and can stop a selected
-app. CPU/GPU, FPS, process memory and stopping use
-[Shizuku](https://shizuku.rikka.app/).
+app, where the device and [Shizuku](https://shizuku.rikka.app/) expose those
+capabilities. CPU/GPU, FPS, process memory and stopping use Shizuku. These are
+capabilities, not universal guarantees: Diagnostics reports what is available
+on the current phone and the exact reason when it is not.
 
 ![Collapsed pill and expanded card](docs/images/overlay.png)
 
@@ -32,19 +34,23 @@ app. CPU/GPU, FPS, process memory and stopping use
   a warning, not a block. The stop is Android's package force-stop, so the whole
   app stops; the page rescans once and a system app that restarts simply
   reappears. There is no raw kill and no undo.
-- **Real temperatures**: CPU/GPU from the platform thermal service through
-  Shizuku; battery temperature and thermal status from Android. Missing sensors
-  render `—`, never another sensor's value.
-- **Foreground FPS**: presented frames of the focused app from SurfaceFlinger,
-  plotted on a fixed 0–120 axis. The overlay's own frames are not counted; an
-  idle app reads 0; no Shizuku reads `—`.
+- **Temperatures where exposed**: CPU/GPU from the platform thermal service
+  through Shizuku, when the HAL provides a matching zone; battery temperature
+  and thermal status from Android. Missing sensors render `—`, never another
+  sensor's value, and Diagnostics names the reason.
+- **Foreground FPS where exposed**: presented frames of the focused app from
+  SurfaceFlinger, plotted on a fixed 0–120 axis. The overlay's own frames are
+  not counted; an idle app reads 0. Without Shizuku or a resolvable focused
+  layer the value is `—`, and Diagnostics shows why.
 - **Recording**: one CSV per session (v2 with FPS), a saved-session list, and a
   full-session graph with CPU/GPU/BAT/SOC/SKIN/FPS. Legend chips dim and restack
   a line; table headers explain each column; long-press selects sessions for
   deletion.
-- **Diagnostics**: current source and age, Shizuku state and version, sysfs
-  read errors, the thermal-zone table and per-zone overrides where sysfs is
-  readable.
+- **Diagnostics**: a per-feature status table (battery, thermal status,
+  CPU/GPU, board, FPS, RAM, process memory, Stop app) with the source and exact
+  reason when something is unavailable, plus current source and age, Shizuku
+  state and version, sysfs read errors, and the thermal-zone table with
+  per-zone overrides where sysfs is readable.
 - **Setup guide**: in-app Shizuku setup and troubleshooting, including the
   "Start keeps searching" fix and a version check when the server is running
   but CPU/GPU stay on `BAT`.
@@ -67,14 +73,30 @@ app. CPU/GPU, FPS, process memory and stopping use
 | Android | 8.0 (API 26) or newer; target API 36 |
 | Shizuku | required for CPU/GPU temperatures, FPS, process memory and stopping apps |
 | Permissions | display over other apps, notifications |
-| Tested device | POCO X7 Pro, Android 16 / HyperOS |
-| Tested Shizuku | 13.5.4 |
+| Verified on (only) | POCO X7 Pro, Android 16 / HyperOS |
+| Verified Shizuku | 13.5.4 |
 
 Battery temperature, thermal status and the system RAM card work without
-Shizuku. On the tested
-device, Shizuku 13.6.0 fails to start its UserService (upstream issue
-[#2633](https://github.com/RikkaApps/Shizuku/issues/2633)); 13.5.4 is the
-working version there. Other devices and versions may differ.
+Shizuku. On the verified device, Shizuku 13.6.0 fails to start its UserService
+(upstream issue [#2633](https://github.com/RikkaApps/Shizuku/issues/2633));
+13.5.4 is the working version there. Other devices and versions may differ.
+
+## What "works" means
+
+"Verified" in this README means the named build was run on the device above. It
+is not a claim that every Android 8+ phone exposes every measurement.
+
+- **No shell needed:** battery temperature, thermal status (Android 10+), system
+  RAM, own-app data, overlay, recording, sessions and settings. OEM policy can
+  still block the overlay or autostart.
+- **Shizuku tier:** CPU/GPU temperatures, FPS, process memory and stopping apps.
+  The platform or OEM may omit a sensor, use a different SurfaceFlinger layer or
+  `dumpsys` format, or refuse a command.
+- **Diagnostics is the source of truth:** each feature has a state (`OK`,
+  `DEGRADED`, `UNAVAILABLE`, `BLOCKED`, `UNKNOWN`), a source and the exact
+  reason — for example Shizuku not running, permission missing, no focused
+  layer, no matching thermal zone, no process rows, or a protected package. A
+  missing value is a reported capability result, not a silent success.
 
 ## Install
 
@@ -148,12 +170,17 @@ Replace the key before distributing the app; see
 source covered by the 214 JVM tests; the R8 keep rule protects the Shizuku
 UserService.
 
-Installed and device-verified on the POCO X7 Pro: the Shizuku UserService and
-FPS path survive R8, recording and the Sessions graph work, and the setup
-guide and degraded-state prompt behave as documented.
+Verified on the POCO X7 Pro only: the Shizuku UserService and FPS path survive
+R8, recording and the Sessions graph work, and the setup guide and
+degraded-state prompt behave as documented. This is not a compatibility
+statement for other phones.
 
 ## Known limitations
 
+- Only the POCO X7 Pro / Android 16 / HyperOS combination above is
+  device-verified. Other devices may lack sensors, use different
+  SurfaceFlinger/`dumpsys` formats, or block Shizuku. Diagnostics reports the
+  per-feature state and reason instead of claiming the feature works there.
 - CPU/GPU temperatures and FPS require Shizuku. Without it the pill shows
   `CPU/GPU —` and `FPS —` alongside the battery value.
 - FPS is the focused app's presented frame rate. A static app reports 0; the
