@@ -71,7 +71,7 @@ fun oemGuidance(family: OemFamily): OemGuidance = when (family) {
       "Autostart and Background autostart, set the battery option to No " +
       "restrictions, and lock the app in Recents, or the overlay stays off until " +
       "you start it by hand. Shizuku still has to be started after every reboot, " +
-      "so the pill shows battery temperature until then.",
+      "so CPU/GPU and FPS stay unavailable until then; battery and RAM still work.",
     shizukuBody = "On HyperOS, allow Shizuku to autostart and set its battery " +
       "option to No restrictions. If Shizuku cannot find the wireless debugging " +
       "connection, toggle Wireless debugging off and on before pressing Start.",

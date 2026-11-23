@@ -10,6 +10,13 @@ and their full source lists are in
 This is a research document, not a promise of support. It separates official /
 AOSP evidence from community reports and labels the current app gaps.
 
+**Status (2026-11-24):** the T19a–T19d slices below shipped, except for the
+fallbacks and probes still listed as open. Statements in the “current app”
+sections are the findings as of 2026-11-23; where a later slice fixed one, the
+text now says so. The only device-verified combination remains the POCO X7 Pro /
+Android 16 / HyperOS / Shizuku 13.5.4 target, and Diagnostics is the per-feature
+source of truth.
+
 ## Executive answer
 
 **There is no universal, permissionless way for a normal third-party app to
@@ -55,7 +62,7 @@ stop (the Settings Force-stop route is user-mediated).
 |---|---|---|---|
 | 0 | No special permission | Battery °C, thermal status (29+), thermal headroom (30+), system RAM, own-process memory, own-window frames, visible package info, overlay/recording/sessions, user-mediated Settings Force stop | Universal; the only tier that needs no shell |
 | 0.5 | Device owner | CPU/GPU/battery/skin °C, thresholds, CPU usage, fans via `HardwarePropertiesManager` | Needs factory-reset/unprovisioned device; no FPS/memory/stop; niche |
-| 1 | Shizuku shell | `dumpsys thermalservice` (Android 10+), sysfs where OEM allows, SurfaceFlinger/gfxinfo FPS, meminfo/PSS, `/proc`, `am force-stop` | Setup + re-arm after reboot on non-root; 13.6.0 UserService regression on Android 16; OEM restrictions |
+| 1 | Shizuku shell | `dumpsys thermalservice` (Android 10+), sysfs where OEM allows, SurfaceFlinger/gfxinfo FPS, meminfo/PSS, `/proc`, `am force-stop` | Setup + re-arm after reboot on non-root; 13.6.0 UserService failure on some Android 16 OEM builds (verified HyperOS/MediaTek); OEM restrictions |
 | 1b | Local ADB/LADB | Could run shell commands | Not credible as an embedded route: Android 11+, `INTERNET`, pairing, incompatible with Shizuku, libadb rewrite; not recommended |
 | 2 | Root | Full sysfs/proc, per-process `kill`, `pm disable`, restricted `smaps_rollup` | Security/integrity cost; not universal |
 | OEM | Vendor services | Some sensors/management | No public third-party API; needs probes/copy |
@@ -102,11 +109,13 @@ capability probing and OEM policy, not a missing permission.
   often to shell; OEM grants vary. Add `/sys/class/hwmon`, `/sys/class/devfreq`,
   `/sys/class/kgsl`, Mali/GED, Samsung `gpu_tmu`, `power_supply`; probe every
   read. `/proc/stat`, `dumpsys cpuinfo` and GPU load nodes are shell-only.
-- **Current accuracy bug:** the app selects the first/lowest-index CPU/GPU zone
-  rather than the hottest. Examples: Pixel 6 34 vs 36 °C; Xiaomi 56.0 vs
-  61.3 °C. The HAL parser also lacks `HAL Ready`/override/status metadata,
-  range/sentinel rules and non-standard `mType` protection; Diagnostics cannot
-  distinguish not-ready, permission, timeout and empty-block failures.
+- **At research time (fixed in T19b-4):** the app selected the first/
+  lowest-index CPU/GPU zone rather than the hottest. Examples: Pixel 6 34 vs
+  36 °C; Xiaomi 56.0 vs 61.3 °C. T19b-4 now aggregates by the hottest zone,
+  rejects out-of-range values and maps common OEM aliases. HAL `Ready`/override
+  metadata, cached/partial dumps and non-standard `mType` protection remain
+  open; Diagnostics cannot yet distinguish not-ready, permission, timeout and
+  empty-block failures.
 
 ### FPS detail
 
@@ -125,10 +134,13 @@ capability probing and OEM policy, not a missing permission.
   not a 2 s source; do not leave global tracking enabled permanently. The
   focused-layer average and overhead need a device test (pending; no phone
   attached during research). FrameTimeline/Perfetto remain diagnosis tools.
-- **Current P0 bug:** `FpsParse` only understands the Android 15+ wrapper, so
-  it can report 0 FPS on Android 8–14; it drops valid `desiredPresentTime = 0`
-  rows; misses legacy/hash layers; can show the previous app for up to 4 s; has
-  no fallback/probe; the session graph clips above 120 fps.
+- **At research time (addressed in T19b):** `FpsParse` only understood the
+  Android 15+ wrapper, so it could report 0 FPS on Android 8–14; it dropped valid
+  `desiredPresentTime = 0` rows, missed legacy/hash layers, could show the
+  previous app for up to 4 s and clipped the session graph above 120 fps.
+  T19b-1 accepts the 8–17 formats, T19b-5 expands the axis, and T19b-6 checks
+  focus while the cached layer is drawing. `gfxinfo`/TimeStats fallbacks remain
+  unimplemented.
 - Shizuku/root is mandatory for another app's FPS; own-app FrameMetrics is the
   only public path.
 
@@ -140,9 +152,10 @@ capability probing and OEM policy, not a missing permission.
   deny), `dumpsys activity processes` (cached PSS), `procstats` (historical).
   PSS is not RSS; `ps` RSS is KiB and its page size assumption needs checking
   on 16 KiB-page devices.
-- **Current parser is AOSP-pretty-only:** drops work-profile rows
-  `(pid N) (user 10)`, rejects `kB`/`KB`, and keeps the previous OOM group on
-  an unknown heading. It has no `ps`/RSS fallback or source/metric label.
+- **At research time (fixed in T19b-2/T19b-3):** the parser dropped work-profile
+  rows `(pid N) (user 10)`, rejected `kB`/`KB` and kept the previous OOM group on
+  an unknown heading. It now tolerates those shapes, falls back to `ps`/RSS when
+  meminfo has no PSS rows, and labels the metric and source actually shown.
 - **Robust stop tiers:**
   - **Primary:** `am force-stop --user <target>` (package-wide, stopped state,
     alarm/job cleanup; shell only; defaults to all users; skips persistent
@@ -159,7 +172,7 @@ capability probing and OEM policy, not a missing permission.
     system/Device Care; ColorOS may reset; vivo may throw `SecurityException`;
     `pm disable` needs root). `pm suspend` is reversible. There is no
     `cmd package set-stopped <pkg> true` in AOSP 16.
-- **Policy needs OEM critical packages**, not only AOSP: Xiaomi
+- **Delivered in T19c-1:** OEM critical packages are protected, not only AOSP: Xiaomi
   (`com.miui.securitycenter`, `com.miui.powerkeeper`), Huawei/HONOR
   (`com.huawei.systemmanager`, `com.huawei.powergenie`, HONOR equivalents),
   ColorOS/Oppo/Realme (`com.coloros.safecenter`, `com.coloros.phonemanager`,
@@ -167,13 +180,14 @@ capability probing and OEM policy, not a missing permission.
   `com.coloros.athena`, `com.coloros.gamespace`), vivo/iQOO (`com.vivo.pem`,
   `com.iqoo.secure`, `com.vivo.abe`, `com.vivo.daemonService`,
   `com.vivo.permissionmanager`).
-- **Package visibility is a stop-flow bug:** hidden `ApplicationInfo` leaves
-  UID/system/persistent flags null; Apps rows become warnings, Processes rows
-  protected. The page already has shell; resolve UID/flags/labels through
-  `cmd package list packages -U`, `dumpsys package` or `ps` instead of
-  `QUERY_ALL_PACKAGES`.
-- The current app's `stopPackage` treats exit 0 with benign output as a
-  failure and has no post-stop verification; both need fixing.
+- **At research time (addressed in T19c-3):** hidden `ApplicationInfo` left
+  UID/system/persistent flags null, so Apps rows became warnings. T19c-3a adds a
+  shell UID table and T19c-3b resolves the selected package's flags through
+  `dumpsys package`; no `QUERY_ALL_PACKAGES`. Hidden Processes rows without a
+  resolvable package remain protected rather than guessing.
+- **Fixed in T19c-2:** `stopPackage` treated exit 0 with benign output as a
+  failure and had no post-stop verification. Success now ignores benign output,
+  checks `ps` for survivors and reports `ERR still running` when one remains.
 
 ## OEM matrix
 
@@ -188,50 +202,50 @@ capability probing and OEM policy, not a missing permission.
 | **Vivo/iQOO** | probe-dependent; no public sensor names | shell route; probe | meminfo; force-stop; pm disable can throw | Shizuku UserService instability/rebind; Autostart |
 | **Motorola/Sony/Asus/Nothing** | near-AOSP; probe | near-AOSP | near-AOSP | OEM game/autostart managers may still interfere |
 
-## Current app — prioritised gaps
+## Research findings and delivery status
 
 ### P0 (portability correctness)
 
-1. `app/src/main/java/dev/rsensors/android/core/FpsParse.kt` — accept Android
-   8–14 plain names and Android 15+ `RequestedLayerState`, strip hashes, accept
-   legacy/BLAST `@0`, allow `desiredPresentTime = 0`, avoid previous-app
-   reuse, add `gfxinfo`/`--timestats` fallbacks and a source label; consider a
-   dynamic session-graph ceiling above 120 fps.
-2. `.../core/ProcessMemory.kt` — tolerate `kB`/`KB`, work-profile `(user N)`,
-   spaced/suffixed pids and unknown group headings; add `meminfo <pid>`,
-   `ps`/RSS and `/proc` fallbacks; label PSS vs RSS.
-3. `.../core/DumpsysParser.kt` + `.../core/ZoneMap.kt` — hottest CPU/GPU
-   aggregation, HAL `ready`/`override`/`status`, cached/partial/SKIN-only
-   dumps, range/sentinel/NaN/unit rules, Samsung aliases/`SUBBAT` rejection,
-   Kirin `soc-thermal`.
-4. `.../core/StopPolicy.kt` + `.../shizuku/DumpsysUserService.kt` +
-   `.../overlay/OverlayService.kt` — OEM protected packages, package
-   visibility shell resolver, post-stop `pidof`/`ps`/`dumpsys package`
-   verification, benign-output handling, no “stopped” claim on a no-op.
-5. `.../source/SysfsSource.kt` — probe hwmon/devfreq/kgsl/Mali/GED/Samsung
-   `gpu_tmu`/power_supply; a Shizuku sysfs reader is a possible tier-1
-   enhancement.
+1. **FPS formats — delivered in T19b-1/T19b-5/T19b-6; fallbacks open.**
+   `FpsParse` now accepts Android 8–14 plain names and Android 15+
+   `RequestedLayerState`, strips hashes, accepts legacy/BLAST `@0` and
+   `desiredPresentTime = 0`, follows a changed focus while the cached layer is
+   drawing, and expands the graph above 120 fps. `gfxinfo`/TimeStats fallbacks
+   and a visible source label remain unimplemented.
+2. **Meminfo parser — delivered in T19b-2/T19b-3.**
+   `ProcessMemory` tolerates `kB`/`KB`, work-profile `(user N)`, spaced/
+   suffixed pids and unknown group headings; it falls back to `ps` RSS and
+   labels PSS vs RSS. Per-pid `meminfo` and `/proc` fallbacks were not added.
+3. **Thermal — partly delivered in T19b-4.**
+   Hottest CPU/GPU aggregation, range rejection and common aliases
+   (`AP`/`BAT`/`SUBBAT`, `soc-thermal`, `gpu_tmu`, `kgsl`) are in. HAL
+   `Ready`/override/status metadata, cached/partial/SKIN-only dumps and
+   sentinel/NaN/unit rules remain open.
+4. **Stop — delivered in T19c-1/T19c-2/T19c-3a/T19c-3b.**
+   OEM protected packages, the on-demand package-facts resolver, shell UIDs,
+   post-stop `ps` verification and benign-output handling are in. `pidof`/
+   `dumpsys package` cross-checks and advanced kill/disable tiers were not
+   added.
+5. **Sysfs — open.**
+   `SysfsSource` still probes a narrow set of paths; hwmon/devfreq/kgsl/Mali/
+   GED/Samsung `gpu_tmu`/power_supply probing and a Shizuku sysfs reader are
+   not implemented.
 
 ### P1 (UX/portability)
 
-- `.../ui/DiagnosticsActivity.kt` — capability matrix: per feature tier,
-  source, ready/permission/timeout/empty state, PSS/RSS, HAL ready.
-- `.../ui/MainActivity.kt` + `.../ui/ShizukuHelpActivity.kt` — OEM-aware
-  autostart/Shizuku copy (HyperOS background autostart, Samsung Sleeping apps,
-  ColorOS Auto launch, vivo Autostart, Huawei App Launch) delivered in T19d-1;
-  the OEM labels and behaviour remain device-unverified. A Tier 0 “Manage apps /
-  Open app info” list with manual Force stop guidance is still open.
-- `.../source/ThermalStatusSource.kt` / `core/Reading.kt` — add the API 30+
-  `getThermalHeadroom()` value as a normalized secondary severity, `NaN`
-  handling, and a Diagnostics label; keep the API 29+ status.
-- `.../ui/ShizukuHelpActivity.kt` — OEM setup variants (Samsung Auto Blocker,
-  ColorOS permission monitoring, vivo rebind, Huawei USB, 13.5.4 fallback).
-- `.../source/ShizukuDumpsysRunner.kt` — timeouts, binder-size guard,
-  capability probe, version/error clarity.
-- `app/src/main/AndroidManifest.xml` — add HOME/IME/Shizuku `<queries>`, no
-  `QUERY_ALL_PACKAGES`, keep no `INTERNET`.
-- Docs — correct the `HardwarePropertiesManager` DEVICE_POWER/device-owner
-  wording; document HarmonyOS NEXT unsupported; document LADB not a route.
+- **Delivered in T19a:** `DiagnosticsActivity` has the per-feature state,
+  source and reason for battery, thermal status, CPU/GPU, board, FPS, RAM,
+  process memory and Stop. HAL ready state and per-feature permission/timeout
+  detail remain incomplete.
+- **Delivered in T19d-1/T19d-2:** OEM-aware autostart/Shizuku copy for the
+  named families, and the Tier 0 `Manage apps` route with manual Force stop
+  guidance. The OEM labels and behaviour remain device-unverified.
+- **Open:** API 30+ `getThermalHeadroom()` as a normalized secondary severity;
+  runner timeouts/binder-size guard/capability probe; HOME/IME `<queries>`
+  entries (only the Shizuku query is present).
+- **Delivered:** Shizuku guide variants include Samsung Auto Blocker, ColorOS
+  permission monitoring, vivo rebind, Huawei USB and the 13.5.4 downgrade;
+  the docs now state HarmonyOS NEXT is unsupported and LADB is not a route.
 
 ### P2 (advanced, not universal)
 
@@ -240,26 +254,19 @@ capability probing and OEM policy, not a missing permission.
 - CPU load/frequency/GPU busy `PerfSnapshot`; Shizuku sysfs; high-refresh graph.
 - Emulator/API fixtures and a second physical device (Pixel/Samsung/OnePlus).
 
-## Recommended T19 plan
+## T19 plan status
 
-- **T19a Capability probe + Diagnostics:** a cached, tiered probe per feature
-  (battery/status/headroom/RAM/own, HAL, sysfs, FPS, meminfo, stop, package
-  resolver) with source/quality/error; show “not available on this phone”
-  instead of guessing.
-- **T19b Parser hardening:** FPS multi-format + `gfxinfo`/TimeStats (device
-  test first); meminfo tolerant + `ps`/RSS fallback; thermal hottest/HAL
-  metadata/cached/aliases/sentinels; sysfs probe; fixtures for Pixel/Tensor/
-  Samsung A52/A7/HAL-false/Xiaomi/Redmi/Huawei/Qualcomm/Mali/GED/hwmon and
-  Android 8–17.
-- **T19c Stop robustness:** OEM denylist, shell package resolver, post-stop
-  verification, benign-output and timeout handling, explicit advanced
-  kill/disable tiers, no fake single-process guarantee; Tier 0 manual Settings
-  Force-stop fallback with a visible package list and no result claim.
-- **T19d OEM UX:** brand-aware autostart/FGS guidance; OEM Shizuku setup;
-  HarmonyOS NEXT unsupported message; compatibility matrix in README; Manage
-  apps / app-info route for no-Shizuku devices.
-- **T19e Tests:** emulator API matrix + one non-Xiaomi device; red-first;
-  mutation checks; no test edits to acceptance.
+- **T19a delivered:** tiered Diagnostics with source/state/reason; HAL/sysfs
+  sub-probes remain partial.
+- **T19b delivered except** `gfxinfo`/TimeStats fallbacks, HAL
+  Ready/cached/partial metadata and the wider sysfs probe list.
+- **T19c delivered:** OEM denylist, shell resolver, UID enrichment and post-stop
+  verification. The manual Settings route shipped later as T19d-2; advanced
+  kill/disable tiers were deliberately left out.
+- **T19d delivered:** brand-aware guidance, compatibility notes, Manage apps
+  and the 13.5.4 setup path; only the target phone has device evidence.
+- **T19e partial:** 417 JVM tests and independent acceptance harnesses ran; the
+  emulator/API matrix and a second physical device were not run.
 - **Out of scope:** a universal CPU/GPU API (does not exist), HarmonyOS NEXT,
   LADB/libadb, `QUERY_ALL_PACKAGES`, mandatory root, vendor SDKs.
 
@@ -291,13 +298,14 @@ access dates are in each raw report.
 
 - No device lab: Samsung, BBK and Huawei statements are source/community based;
   only the POCO/HyperOS target has device evidence. The phone was not attached
-  for the final TimeStats/settings/manual-stop probes; `--timestats` is
-  explicitly marked “device test pending.” Some OEM details may change with
-  One UI 8.x, HyperOS 3.x, ColorOS 16.x, OriginOS 6.x and HarmonyOS NEXT.
+  for the TimeStats probe; `--timestats` remains device-test pending. The manual
+  Manage apps route was later device-checked in T19d-2. Some OEM details may
+  change with One UI 8.x, HyperOS 3.x, ColorOS 16.x, OriginOS 6.x and HarmonyOS
+  NEXT.
 - Community reports are labelled as such in the raw reports; treat them as
   hypotheses until a device probe confirms.
 - The app has no `INTERNET`; this research does not propose adding it or
   LADB/libadb.
-- This document proposes work; it does not claim the app currently supports
-  every row. The only verified combination remains POCO X7 Pro / Android 16 /
-  HyperOS 3 / Shizuku 13.5.4.
+- This document records research and the delivery status of T19; it does not
+  claim the app supports every row. The only verified combination remains POCO
+  X7 Pro / Android 16 / HyperOS 3 / Shizuku 13.5.4.

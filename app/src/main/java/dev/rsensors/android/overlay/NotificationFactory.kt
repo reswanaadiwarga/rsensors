@@ -37,7 +37,7 @@ object NotificationFactory {
   const val NOTIFICATION_ID = 1
 
   private const val CHANNEL_NAME = "Overlay"
-  private const val CHANNEL_DESCRIPTION = "Keeps the temperature overlay on screen"
+  private const val CHANNEL_DESCRIPTION = "Keeps the monitoring overlay on screen"
   private const val TITLE = "Rsensors"
   private const val BADGE_DP = 64f
 

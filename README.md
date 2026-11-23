@@ -22,10 +22,10 @@ on the current phone and the exact reason when it is not.
   `CPU+GPU / CPU / GPU / BAT / FPS` selector; and CPU/GPU / BAT / FPS / RAM
   chips that choose what the pill and notification show.
 - **Process memory**: tap the card's RAM row for a paged list of the top memory
-  consumers, eight per page. The page uses PSS from the platform memory service
-  and falls back to RSS from `ps` when that dump has no PSS rows; its footer
-  labels the metric actually shown (PSS or RSS), and Diagnostics names the
-  matching source (`dumpsys meminfo` or `ps`). `Apps` groups by package and
+  consumers, eight per page. The page uses PSS from `dumpsys meminfo` through
+  Shizuku and falls back to RSS from `ps` when that dump has no PSS rows; its
+  footer labels the metric actually shown (PSS or RSS), and Diagnostics names
+  the matching source (`dumpsys meminfo` or `ps`). `Apps` groups by package and
   hides native/system rows on the PSS route; RSS rows have no OOM group, so
   `Apps` keeps them. `Processes` shows every process. `Refresh` takes a new
   snapshot; `Back` returns to the card. The normal pill keeps updating while the
@@ -33,29 +33,39 @@ on the current phone and the exact reason when it is not.
   offers the setup action.
 - **Stop app**: tap a row to select it, then Stop and confirm. The selection
   bar shows the app, package, its memory and a protection reason. Core system,
-  native, persistent, self and Shizuku processes are protected and never offer
-  Stop; system/foreground/launcher/keyboard/Play services rows warn first. AICore
-  is a warning, not a block. When Android hides an app's details, selecting it
-  reads that one package's flags from the shell (`dumpsys package`) and shows
+  native, persistent, self, Shizuku and the OEM security/power-manager packages
+  in the denylist are protected and never offer Stop; system/foreground/
+  launcher/keyboard/Play services rows warn first. AICore is a warning, not a
+  block. When Android hides an app's details, selecting it reads that one
+  package's flags from the shell (`dumpsys package`) and shows
   `Resolving app details…` until they arrive; the list and Refresh stay usable,
   the result is cached, and the app then gets its real system/persistent tier.
-  A shell UID lookup protects hidden core rows by UID too. Only the selected
-  package is read — no `QUERY_ALL_PACKAGES` and no package list. The stop is
-  Android's package force-stop, so the whole app stops; the page rescans once
-  and a system app that restarts simply reappears. There is no raw kill and no
-  undo; a stop made through **Manage apps** is not verified.
+  A shell UID lookup protects hidden core rows by UID too. Hidden Processes rows
+  without a resolvable package stay protected rather than guessing. Only the
+  selected package is read — no `QUERY_ALL_PACKAGES` and no package list. The
+  stop is Android's package force-stop, so the whole app stops; the shell then
+  checks `ps` for survivors, the page rescans once, and a system app that
+  restarts simply reappears. There is no raw kill and no undo; a stop made
+  through **Manage apps** is not verified.
 - **Temperatures where exposed**: CPU/GPU from the platform thermal service
-  through Shizuku, when the HAL provides a matching zone; battery temperature
-  and thermal status from Android. Missing sensors render `—`, never another
-  sensor's value, and Diagnostics names the reason.
+  through Shizuku, using the hottest matching zone and common OEM aliases;
+  battery temperature and thermal status from Android. Missing sensors render
+  `—`, never another sensor's value, and Diagnostics names the reason.
 - **Foreground FPS where exposed**: presented frames of the focused app from
-  SurfaceFlinger, plotted on a fixed 0–120 axis. The overlay's own frames are
-  not counted; an idle app reads 0. Without Shizuku or a resolvable focused
-  layer the value is `—`, and Diagnostics shows why.
-- **Recording**: one CSV per session (v2 with FPS), a saved-session list, and a
+  SurfaceFlinger, plotted on a 0–120 axis that expands in 30 fps steps when the
+  session exceeds it. The overlay's own frames are not counted; an idle app
+  reads 0. A changed foreground app is picked up on the next poll instead of
+  waiting out the layer cache. Without Shizuku or a resolvable focused layer the
+  value is `—`, and Diagnostics shows why.
+- **Recording**: one CSV per session (v2 with FPS) started from the main switch
+  or the expanded card's `Record session` toggle; a saved-session list, and a
   full-session graph with CPU/GPU/BAT/SOC/SKIN/FPS. Legend chips dim and restack
   a line; table headers explain each column; long-press selects sessions for
   deletion.
+- **Placement**: drag the pill anywhere. With `Snap to edges` on (default) it
+  keeps an 8 dp margin from the nearer side after release; turned off, it stays
+  at the exact drop position, clamped on-screen. Position and expanded state
+  persist.
 - **Diagnostics**: a per-feature status table (battery, thermal status,
   CPU/GPU, board, FPS, RAM, process memory, Stop app) with the source and exact
   reason when something is unavailable, plus current source and age, Shizuku
@@ -180,9 +190,11 @@ gradlew.bat :app:assembleRelease
 ```
 
 The JVM suite covers the pure logic: formatting, thresholds, pill segmentation,
-FPS parsing and the fresh-window arithmetic, CSV v1/v2 round-trips, session
-chart geometry, zone mapping, visibility, ranges and the Shizuku version
-warning. It does not need a device.
+FPS parsing/freshness/cache rules, CSV v1/v2 round-trips, session chart
+geometry, zone mapping and thermal aliases, visibility, ranges, RAM formatting,
+meminfo/PSS/RSS parsing, process grouping and paging, the stop-risk policy and
+post-stop matching, package facts, capability status precedence, OEM guidance
+and the Shizuku version warning. It does not need a device.
 
 The internal design and task log is [ANDROID.md](ANDROID.md); source comments
 cite its sections.
@@ -195,23 +207,25 @@ verified on this phone versus what remains untested.
 
 | | |
 |---|---|
-| File | `rsensors-0.2.0.apk` ([Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)) |
-| Size | 1,105,888 bytes |
-| Version | 0.2.0 (versionCode 2) |
-| SHA-256 | `4232c96e6f1696fd348b593c1df19fdd3894cd1f4e4cb1e8c42f931318ea0023` |
+| File | `rsensors-0.3.0.apk` ([Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)) |
+| Size | 1,155,040 bytes |
+| Version | 0.3.0 (versionCode 3) |
+| SHA-256 | `f356da99f680a5af891a3a6e32232e7d623d3b88ba4834ac8d89623f80255c7e` |
 | Signature | APK Signature Scheme v2, local debug key |
 | Shrinking | R8 full mode and resource shrinking |
 
 The release APK is signed with a local debug key for personal sideloading.
 Replace the key before distributing the app; see
 [docs/BUILDING.md](docs/BUILDING.md#release-signing). The APK is built from the
-source covered by the 214 JVM tests; the R8 keep rule protects the Shizuku
+source covered by the 417 JVM tests; the R8 keep rule protects the Shizuku
 UserService.
 
-Verified on the POCO X7 Pro only: the Shizuku UserService and FPS path survive
-R8, recording and the Sessions graph work, and the setup guide and
-degraded-state prompt behave as documented. This is not a compatibility
-statement for other phones.
+Verified on the POCO X7 Pro only (2026-11-24): 0.3.0 installed over the debug
+build with data preserved. The R8 UserService served thermal, FPS, meminfo and
+process-UID calls; Diagnostics reported all eight features `OK`; the process
+page showed 267 PSS rows as 81 apps and 267 processes. No FATAL or ANR was
+logged. The stop action and hidden-package dump were not re-run in this release
+smoke. This is not a compatibility statement for other phones.
 
 ## Known limitations
 
@@ -219,8 +233,9 @@ statement for other phones.
   device-verified. Other devices may lack sensors, use different
   SurfaceFlinger/`dumpsys` formats, or block Shizuku. Diagnostics reports the
   per-feature state and reason instead of claiming the feature works there.
-- CPU/GPU temperatures and FPS require Shizuku. Without it the pill shows
-  `CPU/GPU —` and `FPS —` alongside the battery value.
+- CPU/GPU temperatures, FPS and process memory require Shizuku. Without it the
+  pill shows `CPU/GPU —` and `FPS —` alongside the battery and RAM values, and
+  Diagnostics reports the missing shell tier.
 - When Shizuku is unavailable, stop an app by hand: **Manage apps** on the main
   screen opens Android's app list, where you can open the app and tap **Force
   stop**. Android asks for confirmation; Rsensors cannot verify or undo that

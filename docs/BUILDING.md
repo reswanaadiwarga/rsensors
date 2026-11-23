@@ -25,14 +25,17 @@ release APK to `app/build/outputs/apk/release/app-release.apk`.
 
 ## Tests
 
-The JVM suite has no device dependency. It covers the pure logic only:
-formatting, thresholds, pill segments, FPS parsing and the fresh-window
-arithmetic, CSV v1/v2 round-trips, session chart geometry, zone mapping,
-visibility, ranges and the Shizuku version predicate.
+The JVM suite has no device dependency. It covers the pure logic: formatting,
+thresholds, pill segments, FPS parsing/freshness/cache rules, CSV v1/v2
+round-trips, session chart geometry, zone mapping, thermal aliases, visibility,
+ranges, RAM formatting, meminfo/PSS/RSS parsing, process grouping and paging,
+the stop-risk policy and post-stop matching, package facts, capability
+status/reason precedence, OEM guidance and the Shizuku version predicate.
 
-Manual checks on a device: overlay permission, drag/expand, Shizuku binding and
-CPU/GPU values, FPS during scrolling and at rest, recording + Sessions graph,
-Diagnostics, the setup guide and boot start.
+Manual checks on a device: overlay permission, drag/snap/expand, Shizuku binding
+and CPU/GPU values, FPS during scrolling, at rest and across an app switch,
+process memory in both filters, stop confirmation and the post-stop rescan,
+recording + Sessions graph, Diagnostics, the setup guide and boot start.
 
 ## Release signing
 
@@ -65,4 +68,4 @@ is written to `app/build/outputs/mapping/release/`.
 ## Version
 
 `versionCode` / `versionName` live in `app/build.gradle.kts`. The current release
-is `versionCode 2`, `versionName 0.2.0`.
+is `versionCode 3`, `versionName 0.3.0`.

@@ -467,7 +467,7 @@ private fun HomeScreen(
     ) {
       Text("Rsensors", style = MaterialTheme.typography.headlineMedium)
       Text(
-        "An always-on-top pill with CPU, GPU and battery temperatures.",
+        "An always-on-top pill with CPU/GPU and battery temperatures, FPS and RAM.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
       )
@@ -639,9 +639,10 @@ private fun HomeScreen(
       }
 
       Text(
-        "With Shizuku running and permission granted, CPU and GPU come from " +
-          "Android's thermal service. Without Shizuku, Rsensors can show only " +
-          "battery temperature.",
+        "With Shizuku running and permission granted, CPU/GPU temperatures, FPS " +
+          "and process memory come from the shell. Without it, battery " +
+          "temperature, thermal status and system RAM still work, and Manage apps " +
+          "is the manual stop route.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
       )

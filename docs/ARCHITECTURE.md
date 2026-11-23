@@ -20,6 +20,8 @@ diagnostics and the Shizuku guide.
 OverlayService (foreground service)
   worker poll: 2 s expanded / 5 s collapsed
         |
+        +--> ActivityManager.MemoryInfo -> RamUsage (no shell)
+        |
         v
   SourceChain.poll(now)
     1. DumpsysThermalSource  (Shizuku UserService: dumpsys thermalservice)
@@ -58,6 +60,7 @@ the page closed or a newer stop replaced it.
 | sysfs thermal zones | CPU/GPU/BAT | best-effort; denied to the app UID on the test device |
 | `ACTION_BATTERY_CHANGED` | battery °C | extra value divided by 10 |
 | `PowerManager` thermal status | NONE…SHUTDOWN | API 29+ |
+| `ActivityManager.MemoryInfo` | RAM used/total | every poll, independent of the source chain |
 | SurfaceFlinger | FPS | focused app's presented frames; see below |
 
 The source chain merges the first non-null value per field and records each
@@ -74,6 +77,13 @@ nanoseconds; only frames within the last 1500 ms count. Fewer than two fresh
 frames, or a ring whose newest timestamp is older than the window, reports 0.
 The overlay's own layer is never used. Without Shizuku the field is null and
 the UI shows `—`.
+
+The layer is cached across polls. While that layer still has two fresh frames,
+the service reads focus with the lighter `dumpsys window displays`; a readable,
+different focus bypasses the 4 s re-resolve gate and reuses that read to resolve
+the new component immediately. A matching or unreadable focus keeps the cached
+measurement, and a stale/idle layer skips the extra dump and keeps the 4 s path,
+so an idle app does not become a dumpsys loop.
 
 ## Sessions
 
@@ -96,8 +106,10 @@ be opened or deleted. Deletion is permanent and confirmed.
 - The main screen, sessions, session detail, diagnostics and setup guide are
   Compose activities.
 - The session graph is a Compose Canvas: shared temperature scale, a separate
-  0–120 FPS axis, a legend that dims/restacks series, and a crosshair tooltip.
-- The card's 2-minute graph and min/max ranges use the same in-memory history.
+  FPS axis that starts at 0–120 and expands in 30 fps steps when the recorded
+  peak exceeds it, a legend that dims/restacks series, and a crosshair tooltip.
+- The card's 2-minute graph and min/max ranges use the same in-memory history,
+  and the graph applies the same dynamic FPS baseline to its visible window.
 - The expanded card has a full-width `Record session` / `Stop recording` toggle.
   It posts to the same recorder worker as the main-screen Record switch, so the
   CSV format and start/stop semantics are identical; the label and
@@ -142,9 +154,10 @@ strings; `stopPackage` validates the package name and runs
 source. The R8 keep rule is `dev.rsensors.android.shizuku.**` because Shizuku
 starts the class by name.
 
-On the tested POCO X7 Pro / Android 16, Shizuku 13.6.0 fails to start a
-UserService (upstream issue #2633); 13.5.4 works. The setup guide warns about
-that combination and points at Diagnostics for the version.
+On the tested POCO X7 Pro / Android 16 / HyperOS / MediaTek combination,
+Shizuku 13.6.0 fails to start a UserService (upstream issues #2629 and #2633);
+13.5.4 works. The setup guide warns about that combination and points at
+Diagnostics for the version.
 
 ## Permissions and security
 
@@ -160,8 +173,9 @@ that combination and points at Diagnostics for the version.
 ## Tests
 
 Pure logic is covered by JVM tests: formatting, thresholds, segments, FPS
-parsing/freshness, CSV v1/v2, session chart geometry, zone mapping, visibility,
-ranges, process-memory PSS parsing/grouping/paging, stop-risk tiers, capability
-status/reason precedence, and the version predicate. The suite is independent
-of a device. Overlay, Shizuku, recording, stop and UI behaviour are checked
-manually on the target phone; see `docs/BUILDING.md`.
+parsing/freshness/cache rules, CSV v1/v2, session chart geometry, zone mapping,
+thermal aliases, visibility, ranges, RAM formatting, meminfo/PSS/RSS parsing,
+process grouping/paging, stop-risk tiers, post-stop matching, package facts,
+capability status/reason precedence, OEM guidance and the version predicate. The
+suite is independent of a device. Overlay, Shizuku, recording, stop and UI
+behaviour are checked manually on the target phone; see `docs/BUILDING.md`.

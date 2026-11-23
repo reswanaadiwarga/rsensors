@@ -10,9 +10,9 @@ dynamic FPS axis, T19b-6 FPS cache invalidation, T19c-1 OEM stop denylist,
 T19c-2 post-stop verification, T19c-3a shell UID enrichment, T19c-3b on-demand
 hidden-package flags, T19d-1 brand-aware setup guidance and T19d-2 manual
 Manage apps route, complete in code.**
-The RAM pill, process-memory page and Stop app are committed on `feat/stop-app`
-(T17 is on the parent `feat/process-ram`) and installed/device-verified on the
-target (**280 tests** at T18). T19a adds the Diagnostics feature-status table
+The RAM pill, process-memory page and Stop app (T17/T18) are on `main` and
+installed/device-verified on the target (**280 tests** at T18). T19a adds the
+Diagnostics feature-status table
 (**299 tests**, 160 independent acceptance checks; device-verified 2026-11-23
 with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
 (**324 total**); T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**);
@@ -20,10 +20,10 @@ T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
 (**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
 The Shizuku 13.5.4 guide update adds 1 (**393 total**); T19c-3a adds 8
 (**401 total**); T19c-3b adds 15 (**416 total**); T19b-6 adds 1 (**417 total**).
-All are on local `main`. Device evidence is Android 16 only where available;
-Shizuku 13.5.4 is restored and normal transport works. The 0.2.0 release remains
-the published baseline and does not include these changes. Nothing is pushed.
-This file is the source of truth for the app; change it before changing code.
+All are on `main`. Device evidence is Android 16 only where available; Shizuku
+13.5.4 is restored and normal transport works. The 0.2.0 release remains the
+last published APK until the 0.3.0 build ships. This file is the source of truth
+for the app; change it before changing code.
 
 ## Verification scope
 
@@ -162,15 +162,17 @@ nice-to-haves:
   left accent, larger row) and opens a selection bar; nothing stops on the
   first tap. The bar shows the app/process, PSS, the package on its own line and
   a protection reason; protected rows show a padlock + `PROTECTED` and no Stop.
-  `Stop` always asks `Stop <app>?` once more before the action. Warning rows
+  `Stop` always asks `Stop <app>?` once more before the action. Core system
+  packages and the T19c-1 OEM denylist are protected. Warning rows
   (system/updated-system apps such as AICore, foreground/visible groups,
   launcher, current IME, GMS when its OOM group is not protected) show the
   reason and still allow the stop. Normal cached/background apps also
   confirm. `am force-stop <package>` runs through Shizuku, so it stops the whole
   app; in `Processes` the action is labelled `Stop app` and says that all of the
-  package's processes stop. Native rows are protected. After a stop the page
-  rescans once and shows `Stop requested` or the failure; a system app that
-  restarts simply reappears. No raw `kill`, no undo.
+  package's processes stop. Native rows are protected. The shell then checks
+  `ps` for survivors (T19c-2); the page rescans once and shows `Stop requested`
+  or the failure, and a system app that restarts simply reappears. No raw
+  `kill`, no undo.
 - **Manage apps** (main screen): the manual fallback when Shizuku is
   unavailable. It opens Android's app list; the user opens the app's info page
   and taps Force stop. Android asks for confirmation and performs the stop, and
@@ -546,8 +548,8 @@ the per-feature Diagnostics status table before the universality work.
 | T19a ✅ | Diagnostics feature status | "Feature status" table above the snapshot: eight rows (battery, thermal status, CPU/GPU, board, FPS, RAM, process memory, Stop app), each with state, source and exact reason; precedence demo → Shizuku installed/running/permission → overlay → probe/value; battery/thermal/RAM stay tier 0; FPS probe every poll and meminfo/stop last-attempt probes with `shellBlocked` recovery clearing; cancelled scans/stops get terminal states; no new permissions, dependencies or measurement behaviour; 299 tests; 160 independent acceptance checks; device-verified 2026-11-23 with caveats (Shizuku-down/recovery and the protected-stop UI path were not forced) |
 | T19b-1 ✅ | FPS parser portability | Accepts Android 8–14 plain `--list` lines and Android 15+ wrappers; hash/legacy/BLAST/`@0(BLAST)` names; `desiredPresentTime=0` rows; `AppWindowToken` focus. Hash-prefixed plain layers are skipped when an exact twin exists (Android 16 containers) and kept only as an Android 17 fallback. 324 tests; 56 independent acceptance checks; Android 16 smoke at 0/53/60/120 fps. Real Android 8–14/17 formats remain unverified. |
 | T19b-2 ✅ | Meminfo parser tolerance | Work-profile `(pid N) (user 10)`, `kB`/`KB`/`kb`, `/ activities` and `:remote` pid suffixes, case-insensitive `pid`/`user`; unclean headings become `Unknown` instead of inheriting the previous group; malformed `(pid` rows do not change the group. PSS/grouping/sort/page behavior unchanged. 330 tests; 25 independent acceptance checks; Android 16 smoke scanned 281 processes in Apps/Processes with a working pager. The `ps`/RSS fallback and the PSS-vs-RSS label are delivered by T19b-3 below. |
-| T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only; the production Shizuku UserService is currently blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE, so the normal-transport `ps` fallback is not device-verified. |
-| T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified because Shizuku 13.6.0 blocks the normal UserService transport. |
+| T19b-3 ✅ | RSS fallback and metric label | When `dumpsys meminfo --oom` yields no PSS rows, the UserService runs `/system/bin/ps -A -o PID,RSS,NAME` (absolute path, argv array, read to EOF before waiting) and returns its stdout; a meminfo failure also falls through to `ps`, and both failing is one concise exception. `parsePsRss` finds a case-insensitive `PID`/`RSS`/`NAME` header (also `CMD`/`COMMAND`), maps columns by header position, joins a trailing name, and rejects non-positive pids, negative or non-integer RSS and short rows; zero RSS is accepted deliberately because kernel threads report it (real `ps` on the target has 779 zero-RSS rows). Every row carries group `RSS` so the Apps filter keeps system/native rows it cannot classify. `parseProcessSnapshot` prefers PSS, falls back to RSS and defaults to an empty PSS snapshot. The process page's footer and accessibility text label the metric actually shown (PSS or RSS), and Diagnostics reports the matching source (`dumpsys meminfo` or `ps`) plus the metric in its detail, or the neutral source `process memory` while a scan is running, failed or cancelled before any snapshot exists; `pssKb` became `memoryKb` on `ProcessMemory`/`AppMemory`. 345 tests. Device result: the RSS UI, footer label and Diagnostics source were exercised through a temporary forced-RSS verifier shim only. At the time, the production Shizuku UserService was blocked on this MediaTek/Xiaomi device by the known `makeApplicationInner` NPE; 13.5.4 was restored later, but the normal-transport `ps` fallback was not re-forced. |
+| T19b-4 ✅ | Thermal hardening | CPU/GPU HAL entries are aggregated by **hottest**, not first; battery/board keep first. HAL values outside `-40.0..150.0` are rejected, while legitimate negatives remain. `AP`→CPU, `BAT`→BATTERY, `SUBBAT` ignored before the `mType` fallback. ZoneMap adds `soc-thermal`/`ap`→CPU and `gpu_tmu`/`kgsl`→GPU; `subbat` stays OTHER. 355 tests; 61 independent acceptance checks; parent-red + mutation-red. Real OEM HAL/cached/`HAL Ready` formats remain unverified; Shizuku 13.6.0 was blocking the normal UserService transport at the time. |
 | T19b-5 ✅ | Dynamic FPS axis | Session graph and card sparkline use a 120 fps baseline raised in 30 fps steps (150/180/…/500) from the recorded peak; 120 is still the default. v1/no-FPS sessions still hide the axis. 392 tests; 53 independent acceptance checks; parent-red + mutation-red. Real 144/165 Hz rendering remains device-unverified. |
 | T19b-6 ✅ | FPS cache invalidation | When the cached SurfaceFlinger layer still has two fresh frames, the service reads focus from the lighter `dumpsys window displays`; a readable changed focus bypasses the 4 s gate and re-resolves immediately, reusing that focus read. Focus failure keeps the cached FPS; stale/idle layers skip the extra dump and keep the 4 s path. 417 tests; 6 independent acceptance checks; mutation-red. Device: Settings 60 → Launcher 115 within one poll, idle 0 for 5/5 polls, no crash. Other Android versions whose `displays` dump omits `mFocusedApp` fall back to the old 4 s behaviour. |
 | T19c-1 ✅ | OEM stop denylist | Adds normalized OEM protected packages: Xiaomi (`securitycenter`, `powerkeeper`), Huawei/HONOR (`systemmanager`, `powergenie`), ColorOS/Oppo/Realme (`safecenter`, `phonemanager`, `securitypermission`, `apprecover`, `athena`, `gamespace`), vivo/iQOO (`pem`, `secure`, `abe`, `daemonService`, `permissionmanager`). They are PROTECTED with `"OEM system package."`, checked after core and before persistent/system/group reasons; exact membership only. 360 tests; 94 independent acceptance checks; parent-red + mutation-red. OEM package names/build variants remain device-unverified. |
@@ -558,11 +560,10 @@ the per-feature Diagnostics status table before the universality work.
 | T19d-2 ✅ | Manual Manage apps fallback | Tier 0 escape hatch for phones without the Shizuku shell route: an `OutlinedButton` labelled `Manage apps` on the main screen opens Android's app list, where the user opens an app's info page and taps `Force stop` by hand. API 29+ launches `Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS` and falls back to `Settings.ACTION_APPLICATION_SETTINGS` when that launch throws; both attempts are guarded, so a missing Settings activity cannot crash the app. The copy states that Android asks for confirmation and Rsensors cannot verify or undo the stop, and no code reads a result. No new permission, no `QUERY_ALL_PACKAGES`, no package list, and no Shizuku/shell/process-page change. UI-only; 393 tests unchanged. Device-checked on the target: the intent opened HyperOS's `Apps` screen (`com.miui.securitycenter/.appmanager.AppManagerMainActivity`), Back returned to the main screen without a crash, and logcat showed no FATAL/ANR. The vendor may substitute the settings activity; still not a universal or device-verified claim for other phones. |
 | T19e-1 ✅ | Verification matrix | Adds `docs/VERIFICATION.md`: current target/Shizuku environment, gates, feature × no-shell/Shizuku × device evidence, and the explicit not-verified list (Android 8–14/17 formats, OEMs, second device, HAL/sysfs, shell fallbacks, high-refresh rendering). Links it from README. No code change; device claims remain target-only. |
 
-T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19b-5/T19c-1/T19c-2/
-T19d-1/T19d-2/T19e-1 slices are complete in code on `main`. T17/T18/T19a are
-ancestors of `main` from their feature branches; record, snap, all five T19b
-slices, both T19c slices, both T19d slices and T19e-1 are merged. Nothing is
-pushed.
+T0-T19a plus the record/snap/T19b-1/T19b-2/T19b-3/T19b-4/T19b-5/T19b-6/
+T19c-1/T19c-2/T19c-3a/T19c-3b/T19d-1/T19d-2/T19e-1 slices are complete in code
+on `main`. T17/T18/T19a are ancestors of `main`; record, snap, all six T19b
+slices, all four T19c slices, both T19d slices and T19e-1 are merged.
 
 ### T19d-2 manual Manage apps (2026-11-24)
 
@@ -1060,6 +1061,8 @@ the primary source, not a fallback.
 
 ## 11. Release (T11)
 
+### 0.1.0 (built and device-verified 2026-11-21)
+
 - APK: `app/build/outputs/apk/release/app-release.apk`, 1,053,252 bytes
   (1.00 MiB), SHA-256
   `0944B9E7C2482C921F735BDF55BA5F6FEC092A7F03D1EF2F6196914A4745B59C`.
@@ -1153,3 +1156,42 @@ unchanged Shizuku keep rule; install over the current app; re-grant the overlay
 app-op; device-verify the Shizuku UserService and FPS survive R8, the pill/card
 metrics, the graph selector, session focus/delete, the guide, the notification
 action and the boot switch; record size/hash/signature. Tests: 214.
+
+### 0.3.0 (built and device-verified 2026-11-24)
+
+Built as versionCode 3 / versionName `0.3.0` and installed over the debug app;
+app data was preserved.
+
+| | |
+|---|---|
+| File | GitHub Release asset `rsensors-0.3.0.apk` |
+| Size | 1,155,040 bytes |
+| SHA-256 | `F356DA99F680A5AF891A3A6E32232E7D623D3B88BA4834AC8D89623F80255C7E` |
+| Signature | v2, `CN=Android Debug` (SHA-256 `d0736603…621228`) |
+| Build | R8 full mode + resource shrinking; v7 AIDL service kept |
+
+Device verification on the POCO X7 Pro / Android 16 / HyperOS 3 / Shizuku
+13.5.4:
+
+- Install over the debug 0.3.0 build with `adb install -r`; `versionName=0.3.0`,
+  `versionCode=3`, no DEBUGGABLE flag; sessions and preferences preserved.
+- R8 UserService v7: `runDumpsys` returned 3,141 chars, `runFps` replied,
+  `runMeminfo` returned 31,186 chars / 267 PSS rows, and `runProcessUids`
+  returned 34,507 chars.
+- Pill/notification: `CPU/GPU 42° BAT 38° FPS 0 RAM 7.1G`; the live values and
+  source dot rendered in the card.
+- Diagnostics: all eight rows `OK`; process memory read `Ready — open the
+  process page to scan`, Stop app `Ready — no stop attempted`.
+- Process page: PSS, `81 apps`, `1–8 of 81`, and `267 processes` in the
+  Processes filter; rows and footer ages updated.
+- No FATAL or ANR in logcat. The overlay was stopped and the phone returned to
+  the launcher. The stop action and `dumpsys package` lookup were not invoked in
+  this release smoke; they remain covered by the earlier device checks and the
+  JVM/acceptance suites.
+
+Changes since 0.2.0: RAM card row and pill chip; PSS/RSS process page;
+Stop app with OEM denylist, UID enrichment, on-demand package facts and
+post-stop verification; Diagnostics feature status; FPS parser portability,
+dynamic axis and cache invalidation; meminfo tolerance; thermal hottest/alias
+hardening; card record toggle; snap setting; OEM guidance; Manage apps; and the
+Shizuku 13.5.4 guide. Tests: 417.
