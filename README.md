@@ -1,80 +1,83 @@
 # Rsensors
 
-A floating overlay for Android that shows live CPU/GPU/battery temperatures, the
-foreground app's frame rate, and per-app memory usage — and can stop a selected
-app, where the device and [Shizuku](https://shizuku.rikka.app/) expose those
-capabilities. CPU/GPU, FPS, process memory and stopping use Shizuku. These are
-capabilities, not universal guarantees: Diagnostics reports what is available
-on the current phone and the exact reason when it is not.
+A floating Android monitoring app. It shows CPU/GPU and battery temperatures,
+FPS and RAM in an always-on-top pill, and opens into a card with details,
+session recording and process memory. CPU/GPU temperatures, FPS, process memory
+and app stopping require Shizuku; battery temperature, thermal status and system
+RAM work without it. Diagnostics reports what the current phone exposes and why
+a feature is unavailable.
 
 ![Collapsed pill and expanded card](docs/images/overlay.png)
 
 ## Features
 
-- **Collapsed pill**: `CPU/GPU`, `BAT`, `FPS` and `RAM`, with a source dot.
-  Values follow the green / amber / red bands and dim when the sample is stale.
-  CPU/GPU shows the hotter SoC value and uses the worse of the two levels; RAM
-  is used decimal GB in blue and stays visible when the sensor reading is
-  missing.
-- **Expanded card**: individual CPU, GPU and battery readings, each with the
-  maximum and minimum over the last 2 minutes; thermal status; FPS; system RAM
-  used/total with a compact usage bar; a 2-minute sparkline with a
-  `CPU+GPU / CPU / GPU / BAT / FPS` selector; and CPU/GPU / BAT / FPS / RAM
-  chips that choose what the pill and notification show.
-- **Process memory**: tap the card's RAM row for a paged list of the top memory
-  consumers, eight per page. The page uses PSS from `dumpsys meminfo` through
-  Shizuku and falls back to RSS from `ps` when that dump has no PSS rows; its
-  footer labels the metric actually shown (PSS or RSS), and Diagnostics names
-  the matching source (`dumpsys meminfo` or `ps`). `Apps` groups by package and
-  hides native/system rows on the PSS route; RSS rows have no OOM group, so
-  `Apps` keeps them. `Processes` shows every process. `Refresh` takes a new
-  snapshot; `Back` returns to the card. The normal pill keeps updating while the
-  page is open. Without Shizuku the page explains why it is unavailable and
-  offers the setup action.
-- **Stop app**: tap a row to select it, then Stop and confirm. The selection
-  bar shows the app, package, its memory and a protection reason. Core system,
-  native, persistent, self, Shizuku and the OEM security/power-manager packages
-  in the denylist are protected and never offer Stop; system/foreground/
-  launcher/keyboard/Play services rows warn first. AICore is a warning, not a
-  block. When Android hides an app's details, selecting it reads that one
-  package's flags from the shell (`dumpsys package`) and shows
-  `Resolving app details…` until they arrive; the list and Refresh stay usable,
-  the result is cached, and the app then gets its real system/persistent tier.
-  A shell UID lookup protects hidden core rows by UID too. Hidden Processes rows
-  without a resolvable package stay protected rather than guessing. Only the
-  selected package is read — no `QUERY_ALL_PACKAGES` and no package list. The
-  stop is Android's package force-stop, so the whole app stops; the shell then
-  checks `ps` for survivors, the page rescans once, and a system app that
-  restarts simply reappears. There is no raw kill and no undo; a stop made
-  through **Manage apps** is not verified.
-- **Temperatures where exposed**: CPU/GPU from the platform thermal service
-  through Shizuku, using the hottest matching zone and common OEM aliases;
-  battery temperature and thermal status from Android. Missing sensors render
-  `—`, never another sensor's value, and Diagnostics names the reason.
-- **Foreground FPS where exposed**: presented frames of the focused app from
-  SurfaceFlinger, plotted on a 0–120 axis that expands in 30 fps steps when the
-  session exceeds it. The overlay's own frames are not counted; an idle app
-  reads 0. A changed foreground app is picked up on the next poll instead of
-  waiting out the layer cache. Without Shizuku or a resolvable focused layer the
-  value is `—`, and Diagnostics shows why.
-- **Recording**: one CSV per session (v2 with FPS) started from the main switch
-  or the expanded card's `Record session` toggle; a saved-session list, and a
-  full-session graph with CPU/GPU/BAT/SOC/SKIN/FPS. Legend chips dim and restack
-  a line; table headers explain each column; long-press selects sessions for
-  deletion.
-- **Placement**: drag the pill anywhere. With `Snap to edges` on (default) it
-  keeps an 8 dp margin from the nearer side after release; turned off, it stays
-  at the exact drop position, clamped on-screen. Position and expanded state
-  persist.
-- **Diagnostics**: a per-feature status table (battery, thermal status,
-  CPU/GPU, board, FPS, RAM, process memory, Stop app) with the source and exact
-  reason when something is unavailable, plus current source and age, Shizuku
-  state and version, sysfs read errors, and the thermal-zone table with
-  per-zone overrides where sysfs is readable.
-- **Setup guide**: in-app Shizuku setup and troubleshooting, including the
-  "Start keeps searching" fix and a version check when the server is running
-  but CPU/GPU stay on `BAT`.
-- **Boot**: optional auto-start after the first unlock following a reboot.
+### Pill
+
+- `CPU/GPU`, `BAT`, `FPS` and `RAM`, with a source dot.
+- CPU/GPU is the hotter SoC value and the worse of the two levels; RAM is used
+  memory.
+- Values dim when stale; missing values render `—`.
+
+### Card
+
+- Individual CPU, GPU and battery readings with 2-minute max/min.
+- Thermal status, FPS, and system RAM used/total with a bar.
+- 2-minute sparkline with a `CPU+GPU / CPU / GPU / BAT / FPS` selector.
+- `CPU/GPU / BAT / FPS / RAM` chips choose what the pill and notification show.
+- `Record session`, `Refresh`, `Diagnostics` and `Stop monitoring`.
+
+### Process memory
+
+- Tap the RAM row for a paged list, eight per page.
+- PSS from `dumpsys meminfo`; falls back to RSS from `ps` and labels the metric.
+- `Apps` groups by package and hides Native/System on the PSS route;
+  `Processes` shows every process.
+- `Refresh` and `Back`; the pill keeps updating. Without Shizuku the page
+  explains why it is unavailable.
+
+### Stop app
+
+- Select a row, then Stop and confirm.
+- Protected: Rsensors, Shizuku, native/unknown, core system, OEM security and
+  power managers, persistent apps.
+- Warnings: system apps, foreground apps, launcher, keyboard, Play services and
+  AICore.
+- Hidden app details are resolved for the selected package only; hidden
+  Processes rows stay protected.
+- `am force-stop` stops the whole app; a `ps` check reports survivors; no undo.
+
+### FPS
+
+- The focused app's presented frames from SurfaceFlinger; idle reads 0; the
+  overlay's own frames are excluded.
+- The graph axis starts at 0–120 and expands in 30 fps steps.
+- A changed foreground app is picked up on the next poll.
+
+### Recording
+
+- CSV v2 with FPS, one file per session.
+- Sessions list and full-session graph; legend chips and column help; long-press
+  delete.
+- Screen-off pauses polling, leaving a gap.
+
+### Diagnostics
+
+- Eight rows: battery, thermal status, CPU/GPU, board, FPS, RAM, process memory
+  and Stop app.
+- Each row shows state, source and reason; the screen also shows source and
+  age, Shizuku state and version, sysfs errors, and the thermal-zone table.
+
+### Setup guide
+
+- In-app Shizuku setup, the "Start keeps searching" fix, pairing reset, after
+  reboot, BAT-only, and version checks.
+- Links the 13.5.4 release and gives the install steps.
+
+### Placement and boot
+
+- Drag the pill. `Snap to edges` keeps an 8 dp margin from the nearer side, or
+  the exact drop position when off.
+- Optional start after the first unlock following a reboot.
 
 ## Screenshots
 
@@ -96,62 +99,26 @@ on the current phone and the exact reason when it is not.
 | Verified on (only) | POCO X7 Pro, Android 16 / HyperOS |
 | Verified Shizuku | 13.5.4 |
 
-Battery temperature, thermal status and the system RAM card work without
-Shizuku. Shizuku 13.6.0 supports Android 16 QPR1 in general, but on the verified
-HyperOS / MediaTek device it fails to start its UserService (upstream issues
+Battery temperature, thermal status and system RAM work without Shizuku.
+
+Shizuku 13.6.0 supports Android 16 QPR1 in general, but on the verified
+HyperOS/MediaTek device its UserService fails to start (upstream issues
 [#2629](https://github.com/RikkaApps/Shizuku/issues/2629) and
 [#2633](https://github.com/RikkaApps/Shizuku/issues/2633)); 13.5.4 is the
 working version there. Android refuses an in-place downgrade, so uninstall
-Shizuku first — that clears its pairing and permission data, and Rsensors has to
+Shizuku first. That clears its pairing and permission data, and Rsensors has to
 be granted the permission again. The setup guide links the
 [13.5.4 release](https://github.com/RikkaApps/Shizuku/releases/tag/v13.5.4) and
-gives the download/install steps. Other devices and versions may differ: if
-13.6.0 works on your phone, keep it.
-
-## Compatibility notes
-
-These are setup hints for common OEM software, not verified support. Only the
-POCO X7 Pro build above has been run on a phone; the app names the settings to
-check and Diagnostics reports what your device actually exposes. The research
-and limits are in [docs/UNIVERSALITY.md](docs/UNIVERSALITY.md).
-
-| Device family | Autostart / background | Shizuku note |
-|---|---|---|
-| AOSP / Pixel | No OEM autostart manager; battery optimization can still stop the overlay. | Start the Shizuku server again after a reboot. |
-| Samsung | Remove Rsensors from Sleeping apps and Deep sleeping apps; Auto Blocker may block sideloading. | Keep Shizuku out of Sleeping apps, or the server can stop while the screen is off. |
-| Xiaomi / HyperOS | Allow Autostart and Background autostart, set battery to No restrictions, and lock the app in Recents. | Allow Shizuku to autostart; toggle Wireless debugging if Start keeps searching. |
-| Huawei / HONOR | App launch → Manage manually, with Auto-launch, Secondary launch and Run in background. | Many builds lack Wireless debugging; use USB debugging. |
-| ColorOS / Oppo / Realme | Allow Auto launch and background activity, and turn off system optimization for Rsensors. | Permission monitoring can revoke Shizuku's grant after a reboot. |
-| vivo / iQOO | Allow Autostart and high background power use. | Start Shizuku again after a restart and check that it is allowed to autostart. |
-
-HarmonyOS NEXT does not run Android APKs, so no Android build of Rsensors can
-be installed there.
-
-## What "works" means
-
-"Verified" in this README means the named build was run on the device above. It
-is not a claim that every Android 8+ phone exposes every measurement.
-
-- **No shell needed:** battery temperature, thermal status (Android 10+), system
-  RAM, own-app data, overlay, recording, sessions and settings. OEM policy can
-  still block the overlay or autostart.
-- **Shizuku tier:** CPU/GPU temperatures, FPS, process memory and stopping apps.
-  The platform or OEM may omit a sensor, use a different SurfaceFlinger layer or
-  `dumpsys` format, or refuse a command.
-- **Diagnostics is the source of truth:** each feature has a state (`OK`,
-  `DEGRADED`, `UNAVAILABLE`, `BLOCKED`, `UNKNOWN`), a source and the exact
-  reason — for example Shizuku not running, permission missing, no focused
-  layer, no matching thermal zone, no process rows, or a protected package. A
-  missing value is a reported capability result, not a silent success.
+gives the download and install steps. If 13.6.0 works on your phone, keep it.
 
 ## Install
 
 1. Download the APK from [Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)
    and install it with `adb install` or a file manager.
 2. Open Rsensors and grant **Display over other apps** and **Notifications**.
-3. Install and start [Shizuku](https://shizuku.rikka.app/). Allow Shizuku to send
-   notifications: the pairing code is entered in its notification. Then grant
-   Rsensors the Shizuku permission.
+3. Install and start [Shizuku](https://shizuku.rikka.app/). Allow Shizuku to
+   send notifications: the pairing code is entered in its notification. Then
+   grant Rsensors the Shizuku permission.
 4. Tap **Start monitoring**. The pill appears; the expanded card is one tap.
 5. For the detailed Shizuku flow, open **Shizuku setup guide** in the app.
 
@@ -175,8 +142,42 @@ No `INTERNET` permission. No accessibility service, screen capture or root.
 - Session CSVs live in the app's private `filesDir/sessions` directory and can
   be deleted from the Sessions screen.
 - No analytics, ads or network calls.
-- Shizuku runs a shell-side service; Rsensors calls only the thermal and
-  SurfaceFlinger dumps it needs through that service.
+- Shizuku runs a shell-side service; Rsensors calls only the thermal,
+  SurfaceFlinger and memory dumps it needs through that service.
+
+## Device support
+
+"Verified" means the named build was run on the POCO X7 Pro. It is not a claim
+that every Android 8+ phone exposes every measurement.
+
+- **No shell:** battery temperature, thermal status (Android 10+), system RAM,
+  own-app data, overlay, recording, sessions and settings. OEM policy can still
+  block the overlay or autostart.
+- **Shizuku:** CPU/GPU temperatures, FPS, process memory and stopping apps. The
+  platform or OEM may omit a sensor, use a different SurfaceFlinger layer or
+  `dumpsys` format, or refuse a command.
+- **Diagnostics is the source of truth:** each feature has a state (`OK`,
+  `DEGRADED`, `UNAVAILABLE`, `BLOCKED`, `UNKNOWN`), a source and the exact
+  reason — for example Shizuku not running, permission missing, no focused
+  layer, no matching thermal zone, no process rows, or a protected package.
+
+## Compatibility notes
+
+These are setup hints for common OEM software, not verified support. Only the
+POCO X7 Pro build above has been run on a phone. The research and limits are in
+[docs/UNIVERSALITY.md](docs/UNIVERSALITY.md).
+
+| Device family | Autostart / background | Shizuku note |
+|---|---|---|
+| AOSP / Pixel | No OEM autostart manager; battery optimization can still stop the overlay. | Start the Shizuku server again after a reboot. |
+| Samsung | Remove Rsensors from Sleeping apps and Deep sleeping apps; Auto Blocker may block sideloading. | Keep Shizuku out of Sleeping apps, or the server can stop while the screen is off. |
+| Xiaomi / HyperOS | Allow Autostart and Background autostart, set battery to No restrictions, and lock the app in Recents. | Allow Shizuku to autostart; toggle Wireless debugging if Start keeps searching. |
+| Huawei / HONOR | App launch → Manage manually, with Auto-launch, Secondary launch and Run in background. | Many builds lack Wireless debugging; use USB debugging. |
+| ColorOS / Oppo / Realme | Allow Auto launch and background activity, and turn off system optimization for Rsensors. | Permission monitoring can revoke Shizuku's grant after a reboot. |
+| vivo / iQOO | Allow Autostart and high background power use. | Start Shizuku again after a restart and check that it is allowed to autostart. |
+
+HarmonyOS NEXT does not run Android APKs, so no Android build of Rsensors can
+be installed there.
 
 ## Build and test
 
@@ -200,8 +201,8 @@ The internal design and task log is [ANDROID.md](ANDROID.md); source comments
 cite its sections.
 
 See [docs/BUILDING.md](docs/BUILDING.md) for signing, R8 and the release
-details, and [docs/VERIFICATION.md](docs/VERIFICATION.md) for what is actually
-verified on this phone versus what remains untested.
+details, and [docs/VERIFICATION.md](docs/VERIFICATION.md) for what is verified
+on this phone versus what remains untested.
 
 ## Release
 
@@ -246,8 +247,8 @@ smoke. This is not a compatibility statement for other phones.
 - After a reboot Shizuku must be started again; the overlay starts after the
   first unlock when the boot switch is on.
 - On the tested POCO X7 Pro the app UID cannot list `/sys/class/thermal`, and
-  per-core temperatures are absent. Diagnostics reports the denial; the
-  manual zone overrides are inert on that device.
+  per-core temperatures are absent. Diagnostics reports the denial; the manual
+  zone overrides are inert on that device.
 - Sessions recorded with 0.1.0 (CSV v1) open without an FPS series or column.
 - The release APK is debug-signed; see above.
 
