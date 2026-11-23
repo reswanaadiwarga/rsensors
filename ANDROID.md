@@ -16,6 +16,7 @@ with caveats). Record and snap add 11 tests (**310 total**); T19b-1 adds 14
 (**324 total**); T19b-2 adds 6 (**330 total**); T19b-3 adds 15 (**345 total**);
 T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
 (**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
+The Shizuku 13.5.4 guide update adds 1 (**393 total**).
 All are on local `main`. Device evidence is Android 16 only where available;
 normal UserService transport is currently blocked by Shizuku 13.6.0. The 0.2.0
 release remains the published baseline and does not include these changes.
@@ -424,11 +425,17 @@ in `docs/UNIVERSALITY.md`; they are not device-verified.
   `librish.so` (`UnsatisfiedLinkError`). Start the server with the official
   command instead:
   `pm_path=$(pm path moe.shizuku.privileged.api) && apk_path=${pm_path#package:} && $(dirname $apk_path)/lib/*/libshizuku.so`
-- Shizuku 13.6.0 cannot start UserServices on the target (POCO X7 Pro /
-  Android 16): the starter crashes in `LoadedApk.makeApplicationInner` before
-  app code runs (upstream #2629 and #2633). Use the 13.5.4 manager/server on the
-  target — uninstall + reinstall, then start it with its `start.sh` — until a
-  fixed release. The 13.1.5 client API is compatible with both.
+- Shizuku 13.6.0 supports Android 16 QPR1 in general, but on the target
+  (POCO X7 Pro / Android 16 / HyperOS / MediaTek) its UserService starter
+  crashes in `LoadedApk.makeApplicationInner` before app code runs (upstream
+  #2629 and #2633). Do not generalise this to every Android 16 device. Use the
+  13.5.4 manager/server on the target — uninstall, reinstall from the
+  [13.5.4 release](https://github.com/RikkaApps/Shizuku/releases/tag/v13.5.4),
+  then start it with its `start.sh` — until a fixed release. Android refuses an
+  in-place downgrade, and uninstalling clears Shizuku's pairing/permission data,
+  so permissions must be granted again. The 13.1.5 client API is compatible
+  with both. The help screen's version card links that release and gives the
+  download, uninstall, install, re-pair and re-grant steps.
 - With a secure keyguard, `BOOT_COMPLETED` is dispatched only after the first
   unlock; the overlay starts then. `LOCKED_BOOT_COMPLETED` / directBootAware is
   out of scope: the overlay is hidden on the keyguard and the preferences live
@@ -744,11 +751,11 @@ Defaults are chosen; change them now, not during implementation.
   start adds steps without fixing the connect service. The help screen
   documents both the quick fix and the full reset.
 - Shizuku 13.5.4 is pinned; 13.6.0's UserService regression is still open
-  upstream. This is a development note only: the user-facing guide carries no
-  version requirement, and its last-resort section points at Diagnostics
-  (which shows the version) and suggests trying another Shizuku version. The
-  main-screen source note and the column-help dialogs say "thermal sensors" /
-  "thermal service", never "thermal HAL" or "dumpsys".
+  upstream. The user-facing guide's version card links the 13.5.4 GitHub
+  release and gives the uninstall → install → re-pair → re-grant steps, so a
+  reader can act without a dev note; Diagnostics still shows the installed
+  version. The main-screen source note and the column-help dialogs say "thermal
+  sensors" / "thermal service", never "thermal HAL" or "dumpsys".
 - The pill shows `CPU/GPU` as the hotter of the two SoC values, coloured by the
   worse level; BAT is its own first-class metric. The four chips
   (CPU/GPU, BAT, FPS, RAM) persist as `show_cpugpu`, `show_bat`, `show_fps`,
@@ -871,8 +878,11 @@ Defaults are chosen; change them now, not during implementation.
   bind is a follow-up, not part of T18.
 - The help screen's topics are collapsible cards; the version warning appears
   only when the manager version starts with `13.6.0` and the API is 36+
-  (Android 16). Below 560 dp the status card scrolls with the list instead of
-  being pinned, so a landscape window still shows content.
+  (Android 16). The version card carries the 13.5.4 release link and the
+  download/uninstall/install/re-pair/re-grant steps; opening the link is
+  device-only (no unit test), and a missing browser leaves the copy readable.
+  Below 560 dp the status card scrolls with the list instead of being pinned, so
+  a landscape window still shows content.
 - There is one foreground service (`OverlayService`). `Start/Stop monitoring`
   is the full service toggle: polling, recording, pill and notification.
   `Record session` only writes a CSV while the service runs. Stopping leaves

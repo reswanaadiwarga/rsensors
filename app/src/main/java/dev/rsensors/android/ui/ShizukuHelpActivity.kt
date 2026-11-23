@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -52,6 +53,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import dev.rsensors.android.core.KNOWN_BAD_SHIZUKU_VERSION
+import dev.rsensors.android.core.SHIZUKU_1354_APK
+import dev.rsensors.android.core.SHIZUKU_1354_RELEASE_URL
 import dev.rsensors.android.core.hasKnownShizukuProblem
 import dev.rsensors.android.core.oemFamily
 import dev.rsensors.android.core.oemGuidance
@@ -77,8 +80,12 @@ import rikka.shizuku.Shizuku
  * are a menu of independent cards, not a wall of text.
  *
  * The status card also carries one conditional amber warning when the installed
- * manager and the OS are a combination known to fail. It is a warning about what
- * was detected, not a version requirement: any other combination shows nothing.
+ * manager and the OS are the combination the guide treats as broken. Shizuku
+ * 13.6.0 supports Android 16 QPR1 in general; on some Android 16 devices,
+ * including HyperOS 3, its background helper (UserService) fails to start. The
+ * warning is a hint for that failure, not a version requirement: the version
+ * card links the known-working 13.5.4 release and gives the uninstall/reinstall
+ * steps, and any other combination shows nothing.
  *
  * The status card is read live in [onCreate], [onResume] and from the Refresh
  * button. Every Shizuku, package-manager and Settings call is guarded: a missing
@@ -86,8 +93,9 @@ import rikka.shizuku.Shizuku
  * never a crash. Wireless debugging is best-effort; its row is hidden when the
  * setting is unreadable.
  *
- * Side effects: launches the Shizuku app, its store page, Developer options or
- * the app's system settings page. No network.
+ * Side effects: launches the Shizuku app, its store page, Developer options,
+ * Diagnostics, the app's system settings page, or an external browser for the
+ * Shizuku 13.5.4 release page. The app itself makes no network calls.
  */
 class ShizukuHelpActivity : ComponentActivity() {
   private var installed by mutableStateOf(false)
@@ -460,7 +468,8 @@ private fun StatusCard(
       }
       if (versionWarning) {
         Text(
-          text = "Shizuku $KNOWN_BAD_SHIZUKU_VERSION has a known problem on Android 16. " +
+          text = "On some Android 16 devices, including HyperOS 3, Shizuku " +
+            "$KNOWN_BAD_SHIZUKU_VERSION may fail to start its background helper. " +
             "See \u201cShizuku version problems\u201d below.",
           style = MaterialTheme.typography.bodySmall,
           color = Color(Palette.amber),
@@ -608,14 +617,15 @@ private fun GuideSectionHeader(
 
 /**
  * The copy of one section, in the order the long-page version used: intro,
- * numbered steps, note, trailing action, "why this works".
+ * numbered steps, note, trailing action, link, "why this works".
  *
  * @param section the copy; [GuideSection.steps] are numbered from 1 here
  * @param onOpenDiagnostics invoked by the last section's button, the only section
- *   with an action
+ *   with that action; [GuideSection.linkUrl] is a separate outbound link
  */
 @Composable
 private fun GuideSectionBody(section: GuideSection, onOpenDiagnostics: () -> Unit) {
+  val uriHandler = LocalUriHandler.current
   section.intro?.let { Paragraph(it) }
   section.steps.forEachIndexed { index, step ->
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -631,6 +641,18 @@ private fun GuideSectionBody(section: GuideSection, onOpenDiagnostics: () -> Uni
   if (section.actionLabel != null) {
     OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {
       Text(section.actionLabel)
+    }
+  }
+  val linkLabel = section.linkLabel
+  val linkUrl = section.linkUrl
+  if (linkLabel != null && linkUrl != null) {
+    // A phone with no browser (or a managed profile with the intent blocked) must
+    // leave the copy readable; the steps above still name the asset to download.
+    OutlinedButton(
+      onClick = { runCatching { uriHandler.openUri(linkUrl) } },
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Text(linkLabel)
     }
   }
   section.why?.let {
@@ -659,6 +681,9 @@ private fun Paragraph(text: String) {
  * @param note practical follow-up text shown after the steps
  * @param why one-sentence mechanism note for readers who want the reason
  * @param actionLabel label of the trailing button; the last section only
+ * @param linkLabel label of an outbound link button; only rendered together with
+ *   [linkUrl]
+ * @param linkUrl absolute URL opened by that button, e.g. the Shizuku release page
  */
 private class GuideSection(
   val title: String,
@@ -667,6 +692,8 @@ private class GuideSection(
   val note: String? = null,
   val why: String? = null,
   val actionLabel: String? = null,
+  val linkLabel: String? = null,
+  val linkUrl: String? = null,
 )
 
 /** Step (a): install, enable, pair once, start, grant. */
@@ -728,12 +755,20 @@ private val BAT_STEPS = listOf(
 
 /** Step (f): version checks, kept separate so the last-resort list stays short. */
 private val VERSION_STEPS = listOf(
-  "On Android 16, Shizuku 13.6.0 is known to fail when Rsensors starts its " +
-    "background helper. Installing Shizuku 13.5.4 avoids it.",
-  "If a Shizuku update broke it, reinstall the version you had before.",
-  "If you are on an older version and nothing above works, try updating.",
-  "Keep the version that works. You don't need to update Shizuku unless something " +
-    "stops working.",
+  "This is about a failure on some Android 16 devices, especially HyperOS 3, " +
+    "not about Android 16 itself: Shizuku 13.6.0 supports Android 16 QPR1 in " +
+    "general, so if it works on your phone, keep it. This downgrade is only for " +
+    "that failure.",
+  "Use the link below to open the Shizuku 13.5.4 release on GitHub. Scroll to " +
+    "Assets; if the list is collapsed, tap Assets. Download " +
+    "$SHIZUKU_1354_APK (~3.4 MB). Do not download the Source code zip or tar.",
+  "Android will not install an older version over 13.6.0. Uninstall Shizuku " +
+    "first: this deletes its pairing and permission data, so Rsensors must be " +
+    "granted the Shizuku permission again.",
+  "Install the APK, open Shizuku, and pair and start the server again. Then " +
+    "return to Rsensors and grant the Shizuku permission.",
+  "Keep 13.5.4 until a release fixes the failure. Update again only if the newer " +
+    "version works on your phone.",
 )
 
 /** Step (g): the last-resort checks, ending with the Diagnostics Copy button. */
@@ -803,9 +838,12 @@ private fun guideSections(oemHint: String): List<GuideSection> = listOf(
   GuideSection(
     title = "Shizuku version problems",
     intro = "If the server says Running but Rsensors still shows BAT, or Start " +
-      "never connects, check the Shizuku version in Diagnostics. Some Shizuku " +
-      "releases have problems on certain Android versions.",
+      "never connects, check the Shizuku version in Diagnostics. Shizuku " +
+      "$KNOWN_BAD_SHIZUKU_VERSION supports Android 16 QPR1 in general; this " +
+      "section covers the one failure it has on some phones.",
     steps = VERSION_STEPS,
+    linkLabel = "Open the Shizuku 13.5.4 release on GitHub",
+    linkUrl = SHIZUKU_1354_RELEASE_URL,
   ),
   GuideSection(
     title = "Why the toggle works",

@@ -1,5 +1,6 @@
 package dev.rsensors.android.core
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +10,9 @@ import org.junit.Test
  *
  * The decision is only the manager version name and the API level: Android 16
  * (API 36) and above with a Shizuku 13.6.0 build must warn, everything else must
- * not. Expected values are read from §9, not from the implementation.
+ * not. Expected values are read from §9, not from the implementation. The
+ * release link/asset constants are the published v13.5.4 GitHub release layout,
+ * asserted so the guide cannot drift to a dead or renamed download.
  */
 class ShizukuCompatTest {
 
@@ -38,6 +41,18 @@ class ShizukuCompatTest {
     assertFalse(hasKnownShizukuProblem(null, 36))
     assertFalse(hasKnownShizukuProblem("", 36))
     assertFalse(hasKnownShizukuProblem("   ", 36))
+  }
+
+  @Test
+  fun `the 13_5_4 release link and APK names are exact`() {
+    assertEquals(
+      "https://github.com/RikkaApps/Shizuku/releases/tag/v13.5.4",
+      SHIZUKU_1354_RELEASE_URL,
+    )
+    assertEquals(
+      "shizuku-v13.5.4.r1049.0e53409-release.apk",
+      SHIZUKU_1354_APK,
+    )
   }
 
   @Test

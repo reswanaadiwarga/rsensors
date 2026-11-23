@@ -81,9 +81,16 @@ on the current phone and the exact reason when it is not.
 | Verified Shizuku | 13.5.4 |
 
 Battery temperature, thermal status and the system RAM card work without
-Shizuku. On the verified device, Shizuku 13.6.0 fails to start its UserService
-(upstream issue [#2633](https://github.com/RikkaApps/Shizuku/issues/2633));
-13.5.4 is the working version there. Other devices and versions may differ.
+Shizuku. Shizuku 13.6.0 supports Android 16 QPR1 in general, but on the verified
+HyperOS / MediaTek device it fails to start its UserService (upstream issues
+[#2629](https://github.com/RikkaApps/Shizuku/issues/2629) and
+[#2633](https://github.com/RikkaApps/Shizuku/issues/2633)); 13.5.4 is the
+working version there. Android refuses an in-place downgrade, so uninstall
+Shizuku first — that clears its pairing and permission data, and Rsensors has to
+be granted the permission again. The setup guide links the
+[13.5.4 release](https://github.com/RikkaApps/Shizuku/releases/tag/v13.5.4) and
+gives the download/install steps. Other devices and versions may differ: if
+13.6.0 works on your phone, keep it.
 
 ## Compatibility notes
 
