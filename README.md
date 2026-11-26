@@ -108,8 +108,10 @@ HyperOS/MediaTek device its UserService fails to start (upstream issues
 working version there. Android refuses an in-place downgrade, so uninstall
 Shizuku first. That clears its pairing and permission data, and Rsensors has to
 be granted the permission again. The setup guide links the
-[13.5.4 release](https://github.com/RikkaApps/Shizuku/releases/tag/v13.5.4) and
-gives the download and install steps. If 13.6.0 works on your phone, keep it.
+[13.5.4 release](https://github.com/RikkaApps/Shizuku/releases/tag/v13.5.4),
+gives the download and install steps. The app store can also reinstall 13.6.0:
+on Xiaomi/POCO, GetApps does this, so turn off auto-update for Shizuku and verify
+the manager version in the app. If 13.6.0 works on your phone, keep it.
 
 ## Install
 
@@ -208,10 +210,10 @@ on this phone versus what remains untested.
 
 | | |
 |---|---|
-| File | `rsensors-0.3.0.apk` ([Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)) |
+| File | `rsensors-0.3.1.apk` ([Releases](https://github.com/reswanaadiwarga/rsensors/releases/latest)) |
 | Size | 1,155,040 bytes |
-| Version | 0.3.0 (versionCode 3) |
-| SHA-256 | `f356da99f680a5af891a3a6e32232e7d623d3b88ba4834ac8d89623f80255c7e` |
+| Version | 0.3.1 (versionCode 4) |
+| SHA-256 | `96d8f83db06a04650377e74f89f2c9213d4824b5fc224b824fb24e53d33f563d` |
 | Signature | APK Signature Scheme v2, local debug key |
 | Shrinking | R8 full mode and resource shrinking |
 
@@ -221,12 +223,12 @@ Replace the key before distributing the app; see
 source covered by the 417 JVM tests; the R8 keep rule protects the Shizuku
 UserService.
 
-Verified on the POCO X7 Pro only (2026-11-24): 0.3.0 installed over the debug
-build with data preserved. The R8 UserService served thermal, FPS, meminfo and
-process-UID calls; Diagnostics reported all eight features `OK`; the process
-page showed 267 PSS rows as 81 apps and 267 processes. No FATAL or ANR was
-logged. The stop action and hidden-package dump were not re-run in this release
-smoke. This is not a compatibility statement for other phones.
+Verified on the POCO X7 Pro only: 0.3.0's behavior smoke covered the R8
+UserService (thermal, FPS, meminfo and process-UID calls), Diagnostics 8/8 and
+the process page. 0.3.1 installed over 0.3.0 with data preserved; the new
+Shizuku version-problems steps and the 13.5.4 manager row were verified
+on-device. Stop and hidden-package dump were not re-run. This is not a
+compatibility statement for other phones.
 
 ## Known limitations
 

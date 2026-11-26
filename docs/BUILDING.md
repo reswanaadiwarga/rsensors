@@ -68,4 +68,4 @@ is written to `app/build/outputs/mapping/release/`.
 ## Version
 
 `versionCode` / `versionName` live in `app/build.gradle.kts`. The current release
-is `versionCode 3`, `versionName 0.3.0`.
+is `versionCode 4`, `versionName 0.3.1`.

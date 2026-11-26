@@ -20,7 +20,7 @@ T19b-4 adds 10 (**355 total**); T19c-1 adds 5 (**360 total**); T19c-2 adds 9
 (**369 total**); T19d-1 adds 18 (**387 total**); T19b-5 adds 5 (**392 total**).
 The Shizuku 13.5.4 guide update adds 1 (**393 total**); T19c-3a adds 8
 (**401 total**); T19c-3b adds 15 (**416 total**); T19b-6 adds 1 (**417 total**).
-All are on `main` and published through the 0.3.0 release. Device evidence is
+All are on `main` and published through the 0.3.1 release. Device evidence is
 Android 16 only where available; Shizuku 13.5.4 is installed and normal
 transport works. This file is the source of truth for the app; change it before
 changing code.
@@ -1195,3 +1195,28 @@ post-stop verification; Diagnostics feature status; FPS parser portability,
 dynamic axis and cache invalidation; meminfo tolerance; thermal hottest/alias
 hardening; card record toggle; snap setting; OEM guidance; Manage apps; and the
 Shizuku 13.5.4 guide. Tests: 417.
+
+### 0.3.1 (built and device-verified 2026-11-26)
+
+Built as versionCode 4 / versionName `0.3.1` and installed over 0.3.0; app data
+was preserved. Guide-only change, no behavior changes.
+
+| | |
+|---|---|
+| File | GitHub Release asset `rsensors-0.3.1.apk` |
+| Size | 1,155,040 bytes |
+| SHA-256 | `96D8F83DB06A04650377E74F89F2C9213D4824B5FC224B824FB24E53D33F563D` |
+| Signature | v2, `CN=Android Debug` (SHA-256 `d0736603…621228`) |
+| Build | R8 full mode + resource shrinking; v7 AIDL service kept |
+
+The **Shizuku version problems** section now points at the live status card's
+installed version, says not to trust Shizuku's own home-screen version, and
+explains that an app store can reinstall 13.6.0 after a 13.5.4 downgrade. It
+names GetApps (Mi Picks) on Xiaomi/POCO, Galaxy Store on Samsung, AppGallery on
+Huawei/HONOR and Play Store elsewhere, and tells the user to turn off
+auto-update, uninstall, reinstall and check the row again.
+
+Device result: `versionName=0.3.1`, `versionCode=4`; the status card showed
+`13.5.4.r1049.0e53409`; the expanded section showed the new steps. The first
+13.5.4 install on this phone was replaced by 13.6.0 from `com.xiaomi.mipicks`
+within seconds; disabling GetApps auto-update fixed it. Tests: 417.

@@ -10,13 +10,16 @@ per-feature state, source and reason.
 ## Current environment
 
 - Target: POCO X7 Pro (2412DPC0AG), Android 16 / HyperOS 3.
-- Current Shizuku: **13.5.4** (`13.5.4.r1049.0e53409`), restored from the official
-  GitHub release; server running and Rsensors permission granted.
-- Installed app: **0.3.0 (versionCode 3)**, release build signed with the local
-  debug key, installed over the debug build on 2026-11-24 with data preserved.
+- Current Shizuku: **13.5.4** (`13.5.4.r1049.0e53409`), installed from the
+  official APK by `com.google.android.packageinstaller`; server running and
+  Rsensors permission granted. GetApps auto-update for Shizuku is off.
+- Installed app: **0.3.1 (versionCode 4)**, release build signed with the local
+  debug key, installed over 0.3.0 on 2026-11-26 with data preserved.
 - Shizuku 13.6.0 itself supports Android 16 QPR1, but its UserService fails with
   `LoadedApk.makeApplicationInner` on this HyperOS/MediaTek build. The guide
-  explains the uninstall/reinstall/re-pair path to 13.5.4.
+  explains the uninstall/reinstall/re-pair path to 13.5.4. The first 13.5.4
+  install on 2026-11-26 was replaced by 13.6.0 from `com.xiaomi.mipicks` within
+  seconds; disabling GetApps auto-update fixed it.
 
 ## Gates
 
@@ -48,7 +51,7 @@ assembleDebug and assembleRelease green. Independent acceptance harnesses live i
 | Per-process PSS/RSS | No | `dumpsys meminfo` / `ps` | PSS + shell UID table re-verified on 13.5.4: 296-row scan, 1050 numeric UID rows, pager and Diagnostics OK. The 0.3.0 release smoke parsed 267 PSS rows into 81 apps and 267 processes. RSS UI/source verified through a forced shim; normal `ps` fallback not forced |
 | Hidden-package flags | No | `dumpsys package <pkg>` | Device: hidden Apps rows showed `Resolving app details…`, then resolved SYSTEM; real dumps matched parser for Settings/Chrome/YouTube/android. Hidden Processes rows remain protected as unresolved. Not re-run in the 0.3.0 release smoke |
 | Stop app | No | `am force-stop` + `ps` verification | Stop verified on target with 13.5.4 (historical); post-stop verification is code/JVM-tested. Not re-run in the 0.3.0 release smoke |
-| Release build (R8) | No | Shizuku v7 UserService | Verified 2026-11-24: v7 binder, thermal/FPS/meminfo/UID calls, Diagnostics 8/8, process page, no FATAL/ANR. Stop and `dumpsys package` actions were not invoked |
+| Release build (R8) | No | Shizuku v7 UserService | Verified 2026-11-24 on 0.3.0: v7 binder, thermal/FPS/meminfo/UID calls, Diagnostics 8/8, process page, no FATAL/ANR. 0.3.1 is a guide-only update installed 2026-11-26; the new Shizuku version-problems steps were verified on-device. Stop and `dumpsys package` actions were not invoked |
 | High-refresh FPS graph (144/165) | No | SurfaceFlinger | Geometry JVM-tested; real 144/165 Hz rendering not verified |
 
 ## Not verified
@@ -62,7 +65,7 @@ assembleDebug and assembleRelease green. Independent acceptance harnesses live i
 - The shell `ps` fallback and post-stop verification end-to-end on another
   device; the target's 13.5.4 transport is working, but those paths were not
   re-forced in the latest pass.
-- Stop and hidden-package `dumpsys package` actions in the 0.3.0 release build;
+- Stop and hidden-package `dumpsys package` actions in the 0.3.1 release build;
   the v7 binder and service class survived R8, but those two user actions were
   not invoked during the release smoke.
 - `gfxinfo` / TimeStats FPS fallbacks and period-only

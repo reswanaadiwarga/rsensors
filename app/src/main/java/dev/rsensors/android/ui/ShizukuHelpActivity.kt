@@ -470,7 +470,11 @@ private fun StatusCard(
         Text(
           text = "On some Android 16 devices, including HyperOS 3, Shizuku " +
             "$KNOWN_BAD_SHIZUKU_VERSION may fail to start its background helper. " +
-            "See \u201cShizuku version problems\u201d below.",
+            "If you installed 13.5.4 but this row still shows " +
+            "$KNOWN_BAD_SHIZUKU_VERSION, the old version is still installed. An " +
+            "app store update often replaces it; turn off auto-update for Shizuku " +
+            "before installing 13.5.4 again. See " +
+            "\u201cShizuku version problems\u201d below.",
           style = MaterialTheme.typography.bodySmall,
           color = Color(Palette.amber),
         )
@@ -771,8 +775,18 @@ private val VERSION_STEPS = listOf(
   "Android will not install an older version over 13.6.0. Uninstall Shizuku " +
     "first: this deletes its pairing and permission data, so Rsensors must be " +
     "granted the Shizuku permission again.",
-  "Install the APK, open Shizuku, and pair and start the server again. Then " +
-    "return to Rsensors and grant the Shizuku permission.",
+  "Install the APK, then check the Shizuku row at the top of this screen. It " +
+    "must read 13.5.4. This row shows the version actually installed; do not use " +
+    "the version on Shizuku's own home screen, which can show the server version " +
+    "instead.",
+  "If the row still reads 13.6.0, the old version is still installed. An app " +
+    "store update can replace 13.5.4 within seconds. Turn off auto-update for " +
+    "Shizuku in the store that installed it: GetApps (Mi Picks) on Xiaomi/POCO, " +
+    "Galaxy Store on Samsung, AppGallery on Huawei/HONOR, or Play Store on other " +
+    "phones. The setting is in the store's settings or on Shizuku's store page. " +
+    "Then uninstall Shizuku and install 13.5.4 again.",
+  "Once the row reads 13.5.4, open Shizuku, pair and start the server again. " +
+    "Then return to Rsensors and grant the Shizuku permission.",
   "Keep 13.5.4 until a release fixes the failure. Update again only if the newer " +
     "version works on your phone.",
 )
@@ -844,7 +858,8 @@ private fun guideSections(oemHint: String): List<GuideSection> = listOf(
   GuideSection(
     title = "Shizuku version problems",
     intro = "If the server says Running but Rsensors still shows BAT, or Start " +
-      "never connects, check the Shizuku version in Diagnostics. Shizuku " +
+      "never connects, check the Shizuku row at the top of this screen (or in " +
+      "Diagnostics). It shows the version actually installed. Shizuku " +
       "$KNOWN_BAD_SHIZUKU_VERSION supports Android 16 QPR1 in general; this " +
       "section covers the one failure it has on some phones.",
     steps = VERSION_STEPS,

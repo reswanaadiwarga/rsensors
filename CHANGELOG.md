@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — 2026-11-26
+
+- Updated the Shizuku setup guide's **Shizuku version problems** section. It now
+  tells users to check the installed manager version in the live status card,
+  explains that an app store can reinstall 13.6.0 shortly after a 13.5.4
+  downgrade, and names the auto-update setting on Xiaomi/POCO GetApps, Samsung
+  Galaxy Store, Huawei/HONOR AppGallery and Google Play. No behavior changes.
+- Release: versionCode 4, `0.3.1`, 1,155,040 bytes, SHA-256
+  `96d8f83db06a04650377e74f89f2c9213d4824b5fc224b824fb24e53d33f563d`,
+  debug-signed; 417 JVM tests unchanged.
+
 ## 0.3.0 — 2026-11-24
 
 - Added a system RAM row to the expanded card: used / total in one-decimal GB
